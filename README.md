@@ -44,7 +44,7 @@ Once installed, just ask. The agent doesn't just explain — it discovers your e
 
 | You say | What the agent does |
 |---------|---------------------|
-| "Install Conduktor" | Checks Docker, asks quick test vs existing cluster, runs `docker compose up`, polls health, sets up CLI auth |
+| "Install Conduktor" | Checks Docker/Helm/kubectl, asks quick test vs existing cluster, deploys via Docker Compose or Helm on Kubernetes, polls health, sets up CLI auth |
 | "Encrypt PII fields in my Kafka topics" | Discovers your interceptors and topics via CLI, asks which fields, generates EncryptPlugin YAML, offers `conduktor apply` |
 | "Set up team isolation" | Lists existing virtual clusters, asks how many teams, generates VirtualCluster + ServiceAccount + Group YAML |
 | "I need access to the payments topic" | Discovers topics and your ApplicationInstance, identifies the owner, generates the permission YAML |
