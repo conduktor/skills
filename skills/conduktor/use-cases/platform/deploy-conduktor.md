@@ -2,13 +2,38 @@
 
 ## Agent workflow
 
-1. Ask which deployment method: Docker Compose, Helm, or raw Kubernetes manifests
-2. Ask which components: Console only, Gateway only, or both
-3. Check if there's an existing `docker-compose.yml`, `values.yaml`, or Kubernetes manifests in the workspace
-4. Generate the complete deployment config with all required env vars, ports, and health checks
-5. For Docker Compose: offer to run `docker compose up -d`
-6. For Helm: offer to run `helm install` with the generated values
-7. After deployment, verify with health check endpoints (`/health` on Console 8080, `/health` on Gateway 8888)
+1. Check prereqs: run `docker --version`, `kubectl version --client`, `helm version` to see what's available
+2. Ask the user's goal:
+   - **Quick test**: just try Conduktor with a demo Kafka cluster → use the official quick-start
+   - **Connect to existing cluster**: the user already has Kafka (vanilla, Confluent Cloud, AWS MSK, Aiven, Redpanda) → generate a custom config
+   - **Production deployment**: full setup with Helm/K8s, SSO, monitoring → walk through all options
+3. **Quick test path**:
+   - Run `curl -L https://releases.conduktor.io/quick-start -o docker-compose.yml && docker compose up -d`
+   - Poll health: `until curl -sf http://localhost:8080/platform/api/modules/health/live; do sleep 5; done`
+   - Tell the user: Console at http://localhost:8080, login admin@conduktor.io / admin
+   - This includes Console + Gateway + Redpanda + Schema Registry + sample data
+4. **Existing cluster path**:
+   - Ask: what Kafka flavor? (vanilla, Confluent Cloud, AWS MSK, Aiven, Redpanda)
+   - Ask: bootstrap servers, auth type (PLAINTEXT, SASL_PLAINTEXT, SASL_SSL, SSL), credentials
+   - Ask: schema registry URL if applicable
+   - Ask: want Gateway too or Console only?
+   - Generate a `docker-compose.yml` or `helm values.yaml` with the correct `KAFKA_*` env vars for that flavor
+   - For Confluent Cloud: include `kafkaFlavor` config with cloud API key, environment ID, cluster ID
+   - For AWS MSK with IAM: include IAM callback handler config
+   - Offer to run `docker compose up -d` or `helm install`
+   - Verify with health check, then help add the cluster in Console if needed
+5. **Production path**:
+   - Ask: Docker Compose or Helm/K8s?
+   - Ask: Console only, Gateway only, or both?
+   - Ask: auth method? (local users, LDAP/AD, OAuth2/OIDC via Auth0/Okta/Cognito)
+   - Ask: license key? (omit for free plan)
+   - Ask: external PostgreSQL connection details
+   - Generate complete config with all env vars, SSO blocks, monitoring, health probes
+   - Include security checklist items in comments
+6. After any deployment, verify health endpoints and help configure CLI auth:
+   - `export CDK_BASE_URL=http://localhost:8080`
+   - `export CDK_API_KEY=<from Console UI: Settings > API Keys>`
+   - `conduktor login` or `conduktor get all --console` to verify
 
 ## When to use this
 
@@ -241,6 +266,109 @@ helm install gateway conduktor/conduktor-gateway -f values.yaml
 Gateway `values.yaml` uses `gateway.env` for environment variables. Full chart reference: `https://github.com/conduktor/conduktor-public-charts`.
 
 You must provide your own PostgreSQL for Console. Conduktor does not ship a database dependency in the Helm chart.
+
+## Connecting to existing Kafka clusters
+
+When generating configs for an existing cluster, use the correct `KAFKA_*` env vars for Gateway or Console cluster YAML.
+
+### Confluent Cloud
+
+Gateway env vars:
+```
+KAFKA_BOOTSTRAP_SERVERS: pkc-xxxxx.region.aws.confluent.cloud:9092
+KAFKA_SECURITY_PROTOCOL: SASL_SSL
+KAFKA_SASL_MECHANISM: PLAIN
+KAFKA_SASL_JAAS_CONFIG: >
+  org.apache.kafka.common.security.plain.PlainLoginModule required
+  username="<cluster-api-key>" password="<cluster-api-secret>";
+```
+
+Console cluster YAML (for `conduktor apply` or platform-config.yaml):
+```yaml
+clusters:
+  - id: confluent-prod
+    bootstrapServers: pkc-xxxxx.region.aws.confluent.cloud:9092
+    properties: |
+      security.protocol=SASL_SSL
+      sasl.mechanism=PLAIN
+      sasl.jaas.config=org.apache.kafka.common.security.plain.PlainLoginModule required username="<api-key>" password="<api-secret>";
+    kafkaFlavor:
+      type: Confluent
+      key: "<cloud-api-key>"
+      secret: "<cloud-api-secret>"
+      confluentEnvironmentId: "<env-id>"
+      confluentClusterId: "<cluster-id>"
+    schemaRegistry:
+      url: https://psrc-xxxxx.region.aws.confluent.cloud
+      security:
+        username: "<sr-api-key>"
+        password: "<sr-api-secret>"
+```
+
+### AWS MSK with IAM
+
+```
+KAFKA_BOOTSTRAP_SERVERS: b-1.mycluster.xxxxx.kafka.region.amazonaws.com:9098
+KAFKA_SECURITY_PROTOCOL: SASL_SSL
+KAFKA_SASL_MECHANISM: AWS_MSK_IAM
+KAFKA_SASL_JAAS_CONFIG: software.amazon.msk.auth.iam.IAMLoginModule required;
+KAFKA_SASL_CLIENT_CALLBACK_HANDLER_CLASS: io.conduktor.aws.IAMClientCallbackHandler
+```
+
+### AWS MSK with SCRAM
+
+```
+KAFKA_BOOTSTRAP_SERVERS: b-1.mycluster.xxxxx.kafka.region.amazonaws.com:9096
+KAFKA_SECURITY_PROTOCOL: SASL_SSL
+KAFKA_SASL_MECHANISM: SCRAM-SHA-512
+KAFKA_SASL_JAAS_CONFIG: >
+  org.apache.kafka.common.security.scram.ScramLoginModule required
+  username="<user>" password="<password>";
+```
+
+### Aiven / mTLS
+
+```
+KAFKA_BOOTSTRAP_SERVERS: kafka-xxxxx.aivencloud.com:12345
+KAFKA_SECURITY_PROTOCOL: SSL
+KAFKA_SSL_TRUSTSTORE_LOCATION: /certs/truststore.jks
+KAFKA_SSL_TRUSTSTORE_PASSWORD: <password>
+KAFKA_SSL_KEYSTORE_LOCATION: /certs/keystore.jks
+KAFKA_SSL_KEYSTORE_PASSWORD: <password>
+```
+
+### SSO configuration
+
+When the user wants SSO, add to Console env vars or `platform-config.yaml`:
+
+**LDAP**:
+```yaml
+sso:
+  ldap:
+    - name: "corporate-ldap"
+      server: "ldap://ldap.company.com:389"
+      managerDn: "cn=admin,dc=company,dc=com"
+      managerPassword: "${LDAP_PASSWORD}"
+      search-base: "ou=users,dc=company,dc=com"
+      search-filter: "(uid={0})"
+      groups-enabled: true
+      groups-base: "ou=groups,dc=company,dc=com"
+      groups-filter: "(member={0})"
+```
+
+**OAuth2 (Okta, Auth0, etc.)**:
+```yaml
+sso:
+  oauth2:
+    - name: "okta"
+      client-id: "${OAUTH_CLIENT_ID}"
+      client-secret: "${OAUTH_CLIENT_SECRET}"
+      openid:
+        issuer: "https://company.okta.com"
+      scopes: [openid, profile, email]
+```
+
+Callback URL: `http(s)://<console-host>:<port>/oauth/callback/<config-name>`
 
 ## Common mistakes
 
