@@ -26,7 +26,7 @@
    - Ask: Docker Compose or Helm/K8s?
    - Ask: Console only, Gateway only, or both?
    - Ask: auth method? (local users, LDAP/AD, OAuth2/OIDC via Auth0/Okta/Cognito)
-   - Ask: license key? (omit for free plan)
+   - Ask: license key? (required — Console is free, Gateway requires a license)
    - Ask: external PostgreSQL connection details
    - Generate complete config with all env vars, SSO blocks, monitoring, health probes
    - Include security checklist items in comments
@@ -57,7 +57,7 @@ When deploying Conduktor Console (UI + API) and/or Gateway (Kafka proxy) via Doc
 | `CDK_ORGANIZATION_NAME` | Organization name | No (default: `"default"`) |
 | `CDK_ADMIN_EMAIL` | Root admin account email | Yes |
 | `CDK_ADMIN_PASSWORD` | Root admin password. Min 8 chars, mixed case, number, symbol | Yes |
-| `CDK_LICENSE` | Enterprise license key. Omit for free plan | No |
+| `CDK_LICENSE` | License key. Console works without one. Gateway requires a license (`GATEWAY_LICENSE_KEY`) | No (Console) / Yes (Gateway) |
 
 Database URL format: `[jdbc:]postgresql://[user[:password]@][[netloc][:port],...][/dbname][?param1=value1&...]`
 
