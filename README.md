@@ -38,20 +38,18 @@ Conduktor platform expertise for Apache Kafka management, governance, and self-s
 
 ## Usage
 
-Once installed, just work normally. When you mention Conduktor topics, your agent loads the relevant knowledge automatically.
+Once installed, just ask. The agent doesn't just explain — it discovers your environment, asks the right questions, generates configs with real values, and executes.
 
 **Examples:**
 
-| You ask | Agent loads |
-|---------|------------|
-| "Deploy Conduktor with Docker Compose" | `deploy-conduktor.md` |
-| "Encrypt PII fields in Kafka messages" | `encrypt-kafka-data.md` |
-| "Set up virtual clusters for team isolation" | `multi-tenancy.md` |
-| "Create a topic through self-service" | `create-topic.md` |
-| "How do I connect my app to Gateway?" | `onboard-to-kafka.md` |
-| "Write Terraform for Conduktor resources" | `terraform.md` |
-
-The skill uses progressive disclosure: only the `SKILL.md` metadata (~100 tokens) is loaded at startup. Use-case files are pulled in on demand based on your conversation.
+| You say | What the agent does |
+|---------|---------------------|
+| "Install Conduktor" | Checks Docker, asks quick test vs existing cluster, runs `docker compose up`, polls health, sets up CLI auth |
+| "Encrypt PII fields in my Kafka topics" | Discovers your interceptors and topics via CLI, asks which fields, generates EncryptPlugin YAML, offers `conduktor apply` |
+| "Set up team isolation" | Lists existing virtual clusters, asks how many teams, generates VirtualCluster + ServiceAccount + Group YAML |
+| "I need access to the payments topic" | Discovers topics and your ApplicationInstance, identifies the owner, generates the permission YAML |
+| "Create a topic for my service" | Checks your AppInstance's TopicPolicy constraints, asks topic name and config, validates, applies |
+| "Write Terraform for our Conduktor setup" | Exports current resources via CLI, generates matching HCL, offers `terraform plan` |
 
 ## Skill Structure
 
