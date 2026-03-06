@@ -9,9 +9,9 @@
    - **Production deployment**: full setup with Helm/K8s, SSO, monitoring → walk through all options
 3. **Quick test path**:
    - Run `curl -L https://releases.conduktor.io/quick-start -o docker-compose.yml && docker compose up -d`
-   - Poll health: `until curl -sf http://localhost:8080/platform/api/modules/health/live; do sleep 5; done`
-   - Tell the user: Console at http://localhost:8080, login admin@conduktor.io / admin
-   - This includes Console + Gateway + Redpanda + Schema Registry + sample data
+   - Poll health: `until curl -sf http://localhost:8080/api/health/ready; do sleep 5; done`
+   - Tell the user: Console at http://localhost:8080 — it will show an onboarding screen to create the first admin account
+   - This includes Console + Monitoring (Cortex) + Redpanda + Schema Registry + sample data generator (no Gateway)
 4. **Existing cluster path**:
    - Ask: what Kafka flavor? (vanilla, Confluent Cloud, AWS MSK, Aiven, Redpanda)
    - Ask: bootstrap servers, auth type (PLAINTEXT, SASL_PLAINTEXT, SASL_SSL, SSL), credentials
@@ -45,7 +45,7 @@ When deploying Conduktor Console (UI + API) and/or Gateway (Kafka proxy) via Doc
 
 - Image: `conduktor/conduktor-console`
 - Default port: `8080` (configurable via `CDK_LISTENING_PORT`)
-- Runs as non-root user `conduktor-platform` (UID `10001`, GID `0`)
+- Runs as non-root user `conduktor-platform` (UID `10001`, GID `10001`)
 - Volume: `/var/conduktor` for internal data
 - JVM: uses container CGroups limits, 80% of container memory for max heap (`-XX:MaxRAMPercentage=80`)
 
@@ -87,7 +87,7 @@ services:
     volumes:
       - conduktor_data:/var/conduktor
     healthcheck:
-      test: curl -f http://localhost:8080/platform/api/modules/health/live || exit 1
+      test: curl -f http://localhost:8080/api/health/ready || exit 1
       interval: 10s
       start_period: 10s
       timeout: 5s
@@ -107,10 +107,10 @@ volumes:
 ### Health check
 
 ```bash
-curl -f http://localhost:8080/platform/api/modules/health/live
+curl -f http://localhost:8080/api/health/ready
 ```
 
-Returns HTTP 200 when Console is ready. Use in Docker healthcheck and Kubernetes liveness probes.
+Returns HTTP 200 when Console is ready. Liveness: `/api/health/live`. Readiness: `/api/health/ready`. Use readiness for Docker healthcheck and Kubernetes readiness probes.
 
 ## Gateway
 
@@ -130,7 +130,7 @@ Returns HTTP 200 when Console is ready. Use in Docker healthcheck and Kubernetes
 | `GATEWAY_ADVERTISED_HOST` | Hostname returned in metadata for clients | Container hostname |
 | `GATEWAY_ROUTING_MECHANISM` | `port` or `host` (SNI) | `port` |
 | `GATEWAY_SECURITY_MODE` | `GATEWAY_MANAGED` or `KAFKA_MANAGED` | Derived from protocols |
-| `GATEWAY_USER_POOL_SECRET_KEY` | Base64 256-bit key for local service account tokens | (required for SASL) |
+| `GATEWAY_USER_POOL_SECRET_KEY` | Base64 256-bit key for local service account tokens. Generate: `openssl rand -base64 32` | (required) |
 | `GATEWAY_ADMIN_API_USERS` | Admin API credentials JSON | `[{username: admin, password: conduktor, admin: true}]` |
 | `GATEWAY_SECURED_METRICS` | Require auth for HTTP management API | `true` |
 
@@ -206,7 +206,7 @@ services:
     volumes:
       - conduktor_data:/var/conduktor
     healthcheck:
-      test: curl -f http://localhost:8080/platform/api/modules/health/live || exit 1
+      test: curl -f http://localhost:8080/api/health/ready || exit 1
       interval: 10s
       start_period: 10s
       timeout: 5s
