@@ -4,6 +4,12 @@ Agent Skills for AI coding assistants — teaches your agent the Conduktor platf
 
 Skills follow the [Agent Skills](https://agentskills.io/) format and work with Claude Code, Cursor, VS Code (Copilot), Gemini CLI, and [30+ other tools](https://agentskills.io).
 
+## Installation
+
+```bash
+npx skills add conduktor/skills
+```
+
 ## Available Skills
 
 ### conduktor
@@ -29,12 +35,6 @@ Conduktor platform expertise for Apache Kafka management, governance, and self-s
 | Apply traffic control & safeguards | |
 | Automate with CLI & GitOps | |
 | Manage infrastructure with Terraform | |
-
-## Installation
-
-```bash
-npx skills add conduktor/skills
-```
 
 ## Usage
 
