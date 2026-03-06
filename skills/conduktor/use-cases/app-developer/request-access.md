@@ -1,5 +1,15 @@
 # Request access to another team's topic
 
+## Agent workflow
+
+1. Run `conduktor get Topic -o name` to list available topics
+2. Ask which topic the user needs access to and what level (READ or WRITE)
+3. Run `conduktor get ApplicationInstance -o name` to find the user's ApplicationInstance
+4. Run `conduktor get ApplicationInstance -o yaml` on the target topic to identify the owning ApplicationInstance
+5. Generate the `ApplicationInstancePermission` YAML with real names from steps 1-4
+6. Show the YAML and offer to run `conduktor apply -f --dry-run`
+7. On approval, run `conduktor apply -f`
+
 ## When to use this
 
 You need to consume or produce to a topic that belongs to another team's ApplicationInstance. Your own ApplicationInstance does not own the topic prefix -- you need an `ApplicationInstancePermission` granted by the topic owner.

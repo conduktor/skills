@@ -1,5 +1,14 @@
 # Produce and consume through Conduktor Gateway
 
+## Agent workflow
+
+1. Run `conduktor get Topic -o name` to list topics the user can access
+2. Ask which topic to produce to or consume from, and what language (Java, Python, Node.js)
+3. Run `conduktor get ApplicationInstance -o yaml` to get the Gateway bootstrap server and service account credentials
+4. Generate a complete, runnable producer or consumer code snippet with real connection details
+5. If the user needs schema registry, include the proxied schema registry URL in the config
+6. If the topic is not in the user's namespace, suggest requesting access (see `request-access.md`)
+
 ## When to use this
 
 You are an application developer whose team has been given access to Kafka through Conduktor Gateway.

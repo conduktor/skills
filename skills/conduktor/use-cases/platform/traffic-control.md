@@ -1,5 +1,15 @@
 # Traffic control and safeguards with Conduktor Gateway
 
+## Agent workflow
+
+1. Run `conduktor get Interceptor --gateway -o yaml` to check existing safeguard interceptors
+2. Ask what to control: rate limiting, topic creation standards, config protection, read-only mode, or schema enforcement
+3. Ask the scope: global, per virtual cluster, per service account, or per group
+4. Run `conduktor get VirtualCluster -o name` and `conduktor get GatewayServiceAccount -o name` to get real scope targets
+5. Generate the complete `Interceptor` YAML with the correct safeguard `pluginClass` and action (BLOCK, INFO, OVERRIDE)
+6. Show the YAML and offer to run `conduktor apply -f --dry-run`
+7. On approval, run `conduktor apply -f`
+
 Gateway interceptor policies enforce traffic rules at the proxy layer -- before requests reach Kafka. They validate, reject, or silently fix Kafka API requests in real time.
 
 All safeguard plugins live under `io.conduktor.gateway.interceptor.safeguard.*` and are deployed as `kind: Interceptor` resources via CLI, API, Terraform, or UI.

@@ -1,5 +1,15 @@
 # GitOps and automation with the Conduktor CLI
 
+## Agent workflow
+
+1. Run `conduktor token list admin` to verify CLI auth is configured
+2. If not authenticated, help configure `CDK_BASE_URL` + `CDK_API_KEY` (Console) or `CDK_GATEWAY_BASE_URL` + `CDK_GATEWAY_USER`/`CDK_GATEWAY_PASSWORD` (Gateway)
+3. Ask what to automate: export existing state, set up CI/CD pipeline, or manage resources declaratively
+4. To export: run `conduktor get all --console -o yaml` or `conduktor get all --gateway -o yaml` to dump current state
+5. To set up CI/CD: ask which platform (GitHub Actions, GitLab CI, etc.) and generate pipeline config with `--dry-run` validation step
+6. Generate resource YAML files organized by kind or by team
+7. Offer to run `conduktor apply -f --dry-run` to validate before applying
+
 Manage Conduktor Console and Gateway resources declaratively using the `conduktor` CLI (Go binary). Apply YAML definitions from Git, track state, and let CI/CD reconcile drift automatically.
 
 ## When to use this

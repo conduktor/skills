@@ -1,5 +1,14 @@
 # Get started with Kafka through Conduktor
 
+## Agent workflow
+
+1. Run `conduktor get ApplicationInstance -o yaml` to find the user's ApplicationInstance, its cluster, and service account
+2. Run `conduktor get KafkaCluster -o yaml` to discover the Gateway bootstrap server address
+3. Ask what language/framework the user's application uses (Java, Python, Node.js, Go, etc.)
+4. Generate a complete client connection config with real bootstrap servers, credentials, and SASL settings
+5. Run `conduktor get Topic -o name` to show topics the user has access to
+6. If no ApplicationInstance exists, guide through self-service setup or direct to their platform team
+
 Your platform team runs Conduktor Gateway in front of Kafka. This guide gets you connected and producing/consuming in minutes.
 
 ## When to use this

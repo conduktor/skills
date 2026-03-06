@@ -1,5 +1,16 @@
 # Multi-tenancy with Conduktor Gateway
 
+## Agent workflow
+
+1. Run `conduktor get VirtualCluster -o yaml` to list existing virtual clusters
+2. Run `conduktor get GatewayServiceAccount -o name` and `conduktor get GatewayGroup -o name` to see existing accounts and groups
+3. Ask how many teams/tenants, their names, and isolation requirements
+4. Ask the ACL mode for each virtual cluster: `ALLOW_ALL` (dev), `REST_API` (recommended), or `KAFKA_API`
+5. Generate the complete set of resources: `VirtualCluster`, `GatewayServiceAccount`, and `GatewayGroup` YAML for each tenant
+6. If topic aliasing is needed, generate `AliasTopic` resources
+7. Show all YAMLs and offer to run `conduktor apply -f --dry-run`
+8. On approval, run `conduktor apply -f`
+
 Gateway turns a single physical Kafka cluster into N isolated logical clusters using Virtual Clusters.
 Each tenant gets its own namespace for topics, consumer groups, service accounts, ACLs, and interceptors -- all on shared infrastructure.
 

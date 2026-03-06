@@ -1,5 +1,15 @@
 # Enforce data quality with Conduktor
 
+## Agent workflow
+
+1. Run `conduktor get Interceptor --gateway -o yaml` to check existing data quality interceptors
+2. Ask what to enforce: field validation (CEL), schema compliance (JSON Schema/Avro), or header rules
+3. Ask which topics to protect and what action on violation (BLOCK the message or MARK with a header)
+4. Run `conduktor get VirtualCluster -o name` to get available scopes
+5. Generate the complete `Interceptor` YAML with the correct `pluginClass` and validation rules
+6. Show the YAML and offer to run `conduktor apply -f --dry-run`
+7. On approval, run `conduktor apply -f`
+
 ## When to use this
 
 You need to validate Kafka message content at the streaming layer before bad data reaches consumers. Typical scenarios:

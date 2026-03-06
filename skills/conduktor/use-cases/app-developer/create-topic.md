@@ -1,5 +1,15 @@
 # Create a topic through Conduktor self-service
 
+## Agent workflow
+
+1. Run `conduktor get ApplicationInstance -o yaml` to find the user's ApplicationInstance and its topic ownership prefix
+2. Run `conduktor get TopicPolicy -o yaml` to discover naming rules, partition limits, and required labels
+3. Ask the topic name, purpose, and any specific config needs (partitions, retention, cleanup policy)
+4. Validate the proposed name against TopicPolicy constraints and ownership prefix
+5. Generate the complete `Topic` YAML with correct `apiVersion: kafka/v2`, metadata labels, and spec
+6. Show the YAML and offer to run `conduktor apply -f --dry-run`
+7. On approval, run `conduktor apply -f`
+
 ## When to use this
 
 You are an application team member who needs to create a Kafka topic for your application. Your platform team has already set up an `Application`, `ApplicationInstance`, and optionally `TopicPolicy` resources. You create topics using an **AppToken** (application instance API key) scoped to your instance.

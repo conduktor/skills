@@ -1,5 +1,17 @@
 # Encrypt Kafka data with Conduktor Gateway
 
+## Agent workflow
+
+1. Run `conduktor get Interceptor --gateway -o yaml` to check existing encryption interceptors
+2. Ask what to encrypt: specific fields (field-level) or entire payload
+3. Ask which KMS provider (Vault, AWS KMS, Azure, GCP, or in-memory for dev)
+4. Ask which topics and whether to scope by virtual cluster, service account, or group
+5. Run `conduktor get VirtualCluster -o name` and `conduktor get GatewayServiceAccount -o name` to get real scope targets
+6. Generate the complete `Interceptor` YAML with correct `pluginClass`, KMS config, and scope targeting
+7. Generate the matching `DecryptPlugin` interceptor for consumers
+8. Show both YAMLs and offer to run `conduktor apply -f --dry-run`
+9. On approval, run `conduktor apply -f`
+
 Gateway encrypts data as it passes through the proxy, before it reaches the broker. Unlike TLS, data stays encrypted at rest on Kafka brokers. Requires Conduktor Shield license.
 
 ## When to use this

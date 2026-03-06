@@ -1,5 +1,16 @@
 # Infrastructure as Code with the Conduktor Terraform provider
 
+## Agent workflow
+
+1. Check if there are existing `.tf` files in the workspace
+2. Ask what to manage: Console resources, Gateway resources, or both
+3. If no provider config exists, generate the `conduktor` provider block with the correct `mode` and auth env vars
+4. Run `conduktor get all --console -o yaml` or `conduktor get all --gateway -o yaml` to discover existing resources
+5. Generate `conduktor_*` resource blocks in HCL matching the discovered resources
+6. If managing both Console and Gateway, generate provider aliases
+7. Offer to run `terraform init` then `terraform plan`
+8. On approval, offer `terraform apply`
+
 Manage Conduktor Console and Gateway resources declaratively using the official Terraform provider.
 
 ## When to use this

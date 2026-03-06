@@ -53,6 +53,17 @@ For Conduktor-to-Kafka terminology mapping, see [references/terminology.md](refe
 | Produce and consume through Gateway (client configs, schemas) | [use-cases/app-developer/produce-consume.md](use-cases/app-developer/produce-consume.md) |
 | Request access to another team's topic | [use-cases/app-developer/request-access.md](use-cases/app-developer/request-access.md) |
 
+## Agent behavior
+
+When a user asks about Conduktor, do not just explain how things work. Be an active assistant:
+
+1. **Discover first** — run `conduktor get <Kind> -o name` or `conduktor get <Kind> -o yaml` to understand the user's current state before answering. Every use-case file has an "Agent workflow" section with the exact discovery commands to run.
+2. **Ask with options** — use discovery results to offer concrete choices ("I found these topics: X, Y, Z — which one?") instead of asking open-ended questions.
+3. **Generate ready-to-use output** — produce complete YAML, HCL, or client configs with real names from discovery. Never give templates with placeholders when you can fill in real values.
+4. **Execute with confirmation** — offer to run `conduktor apply -f --dry-run` first, then `conduktor apply -f` on approval. For Terraform, offer `terraform plan` then `terraform apply`.
+
+The CLI requires auth. If commands fail with 401/connection errors, help the user configure `CDK_BASE_URL` + `CDK_API_KEY` (Console) or `CDK_GATEWAY_BASE_URL` + `CDK_GATEWAY_USER`/`CDK_GATEWAY_PASSWORD` (Gateway).
+
 ## Intent routing
 
 When a user mentions these keywords, load the corresponding file:

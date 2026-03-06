@@ -1,5 +1,15 @@
 # Deploy Conduktor
 
+## Agent workflow
+
+1. Ask which deployment method: Docker Compose, Helm, or raw Kubernetes manifests
+2. Ask which components: Console only, Gateway only, or both
+3. Check if there's an existing `docker-compose.yml`, `values.yaml`, or Kubernetes manifests in the workspace
+4. Generate the complete deployment config with all required env vars, ports, and health checks
+5. For Docker Compose: offer to run `docker compose up -d`
+6. For Helm: offer to run `helm install` with the generated values
+7. After deployment, verify with health check endpoints (`/health` on Console 8080, `/health` on Gateway 8888)
+
 ## When to use this
 
 When deploying Conduktor Console (UI + API) and/or Gateway (Kafka proxy) via Docker Compose or Kubernetes. Covers minimal bootable configs, env var reference, health checks, and combined deployments.
