@@ -8,10 +8,12 @@
    - **Connect to existing cluster**: the user already has Kafka (vanilla, Confluent Cloud, AWS MSK, Aiven, Redpanda) → generate a custom config
    - **Production deployment**: full setup with Helm/K8s, SSO, monitoring → walk through all options
 3. **Quick test path**:
+   - **Before starting**: check if port 8080 is available with `lsof -i :8080 -sTCP:LISTEN`. If taken, either free it or remap to another port (e.g., `"8088:8080"`) in the compose file.
    - Run `curl -L https://releases.conduktor.io/quick-start -o docker-compose.yml && docker compose up -d`
    - Poll health: `until curl -sf http://localhost:8080/api/health/ready; do sleep 5; done`
    - Tell the user: Console at http://localhost:8080 — it will show an onboarding screen to create the first admin account
-   - This includes Console + Monitoring (Cortex) + Redpanda + Schema Registry + sample data generator (no Gateway)
+   - This includes Console + 2x PostgreSQL (metadata + SQL) + Monitoring (Cortex) + Redpanda + Schema Registry + sample data generator (no Gateway)
+   - **If Console crashes**: always use `docker compose down && docker compose up -d` (full network recreation), NOT `docker compose restart`. DNS resolution failures on macOS Docker Desktop are common and require the network to be torn down and recreated.
 4. **Existing cluster path**:
    - Ask: what Kafka flavor? (vanilla, Confluent Cloud, AWS MSK, Aiven, Redpanda)
    - Ask: bootstrap servers, auth type (PLAINTEXT, SASL_PLAINTEXT, SASL_SSL, SSL), credentials
@@ -379,3 +381,5 @@ Callback URL: `http(s)://<console-host>:<port>/oauth/callback/<config-name>`
 5. **Port-based routing with non-sequential broker IDs** -- A 3-broker cluster with IDs 100, 200, 300 allocates 203 ports. Use SNI routing instead.
 6. **`GATEWAY_ADVERTISED_HOST` not set** -- Clients receive the container hostname, which is not routable externally. Always set to the host/IP clients use.
 7. **Mixing config file and env vars without understanding precedence** -- Env vars override `platform-config.yaml` values. Secrets can use `_FILE` suffix (e.g., `CDK_LICENSE_FILE=/run/secrets/license`).
+8. **Docker Desktop stale port bindings** -- On macOS, if Console crashes, Docker Desktop may keep the host port (e.g., 8080) allocated even after `docker compose down`. `lsof -i :8080` will show `com.docker` still listening. Fix: either restart Docker Desktop, or remap Console to a different host port (e.g., `"8088:8080"`).
+9. **DNS resolution failures on macOS Docker Desktop** -- Console crashes with `java.net.UnknownHostException: postgresql`. This is a Docker Desktop DNS race condition. `docker compose restart` does NOT fix it because the network is reused. Fix: `docker compose down && docker compose up -d` to recreate the Docker network. Adding `links` to the compose file can also help as a preventive measure.
