@@ -39,6 +39,7 @@ Before merging changes, verify against source documentation:
 - Gateway resources and interceptors: [Conduktor docs](https://docs.conduktor.io)
 - CLI commands and flags: `conduktor --help` or CLI docs
 - Terraform resources: [Terraform registry](https://registry.terraform.io/providers/conduktor/conduktor/latest/docs)
+- Live documentation via MCP: query the Conduktor docs server if available (endpoint: `https://docs.conduktor.io/mcp`)
 
 ## Anti-Patterns to Avoid
 

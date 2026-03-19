@@ -51,6 +51,23 @@ Once installed, just ask. The agent doesn't just explain — it discovers your e
 | "Create a topic for my service" | Checks your AppInstance's TopicPolicy constraints, asks topic name and config, validates, applies |
 | "Write Terraform for our Conduktor setup" | Exports current resources via CLI, generates matching HCL, offers `terraform plan` |
 
+## MCP Documentation Server
+
+For details beyond what the skill files cover (specific interceptor configs, API endpoints, edge cases), Conduktor provides an MCP documentation server that agents can query in real time. Skills give static knowledge, the MCP server gives live lookups.
+
+```json
+{
+  "mcpServers": {
+    "conduktor-docs": {
+      "type": "url",
+      "url": "https://docs.conduktor.io/mcp"
+    }
+  }
+}
+```
+
+This exposes a `search_conduktor_documentation` tool that searches across all Conduktor docs and returns contextual content with direct links.
+
 ## Skill Structure
 
 ```
