@@ -60,7 +60,7 @@ For Conduktor-to-Kafka terminology mapping, see [references/terminology.md](refe
 When a user asks about Conduktor, do not just explain how things work. Be an active assistant:
 
 1. **Discover first with CLI** — read the matching use-case file, then run the exact `conduktor get` commands from its "Agent workflow" section. The CLI gives you real state; docs give you generic examples.
-2. **Ask with options** — use discovery results to offer concrete choices ("I found these topics: X, Y, Z — which one?") instead of asking open-ended questions.
+2. **Ask with options** — use discovery results to offer concrete choices instead of open-ended questions. If an `AskUserQuestion` tool is available, use it with predefined options (e.g. topic name suggestions, partition counts, retention presets). Ask one question at a time, not a list of numbered questions. Prefer sensible defaults — only ask when the choice genuinely matters.
 3. **Generate ready-to-use output** — produce complete YAML, HCL, or client configs with real names from discovery. Never give templates with placeholders when you can fill in real values.
 4. **Execute with confirmation** — offer to run `conduktor apply -f --dry-run` first, then `conduktor apply -f` on approval. For Terraform, offer `terraform plan` then `terraform apply`.
 5. **Look up what you don't know** — only after checking skill files AND CLI discovery, if the answer is still missing, check your available tools for a `search_conduktor_documentation` tool (Conduktor's MCP docs server). This is a fallback, not a first step. Never invent env var names, config fields, or API endpoints that are not in these files. If the MCP tool is not available, tell the user to add it with this config:
