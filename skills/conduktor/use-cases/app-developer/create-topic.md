@@ -3,22 +3,22 @@
 ## Agent workflow
 
 1. Run `conduktor get ApplicationInstance -o yaml` to find the user's ApplicationInstance and its topic ownership prefix
-2. Run `conduktor get TopicPolicy -o yaml` to discover naming rules, partition limits, and required labels
+2. Run `conduktor get ResourcePolicy -o yaml` to discover naming rules, partition limits, and required labels
 3. Ask the topic name, purpose, and any specific config needs (partitions, retention, cleanup policy)
-4. Validate the proposed name against TopicPolicy constraints and ownership prefix
+4. Validate the proposed name against ResourcePolicy constraints and ownership prefix
 5. Generate the complete `Topic` YAML with correct `apiVersion: kafka/v2`, metadata labels, and spec
 6. Show the YAML and offer to run `conduktor apply -f --dry-run`
 7. On approval, run `conduktor apply -f`
 
 ## When to use this
 
-You are an application team member who needs to create a Kafka topic for your application. Your platform team has already set up an `Application`, `ApplicationInstance`, and optionally `TopicPolicy` resources. You create topics using an **AppToken** (application instance API key) scoped to your instance.
+You are an application team member who needs to create a Kafka topic for your application. Your platform team has already set up an `Application`, `ApplicationInstance`, and optionally `ResourcePolicy` resources. You create topics using an **AppToken** (application instance API key) scoped to your instance.
 
 ## Prerequisites
 
 - An `ApplicationInstance` exists on the target cluster with `resources[].type: TOPIC` granting you ownership over a name prefix (or literal name).
 - You have an **AppToken** for that application instance (generated from Console UI or by the platform team).
-- You know which `TopicPolicy` constraints apply (check `spec.topicPolicyRef` on your ApplicationInstance).
+- You know which `ResourcePolicy` constraints apply (check `spec.policyRef` on your ApplicationInstance).
 
 ## Topic YAML
 
@@ -55,51 +55,46 @@ Key fields:
 - `spec.partitions`, `spec.replicationFactor` -- immutable after creation.
 - `spec.configs` -- standard Kafka topic configs as string values.
 
-## TopicPolicy constraints
+## ResourcePolicy constraints
 
-TopicPolicies are linked to your ApplicationInstance via `spec.topicPolicyRef`. All policies are evaluated on every `apply`. Constraint types:
+ResourcePolicies are linked to your ApplicationInstance via `spec.policyRef`. All policies with `targetKind: Topic` are evaluated on every `apply`. Rules use CEL (Common Expression Language) expressions.
 
-| Constraint | Target example | Parameters |
-|---|---|---|
-| `OneOf` | `spec.replicationFactor` | `values: ["3"]` |
-| `Range` | `spec.configs.retention.ms` | `min`, `max` (inclusive) |
-| `Match` | `metadata.name` | `pattern` (regex) |
-| `NoneOf` | `spec.configs.cleanup.policy` | `values: [...]` |
-| `AllowedKeys` | `spec.configs` | `keys: [...]` |
-
-Any constraint can be marked `optional: true` -- only validated when the field is present.
-
-Example policy your platform team might have set:
+Example policies your platform team might have set:
 
 ```yaml
 ---
 apiVersion: self-serve/v1
-kind: TopicPolicy
+kind: ResourcePolicy
 metadata:
   name: generic-dev-topic
+  labels:
+    business-unit: delivery
 spec:
-  policies:
-    metadata.labels.data-criticality:
-      constraint: OneOf
-      values: ["C0", "C1", "C2"]
-    spec.configs.retention.ms:
-      constraint: Range
-      min: 60000
-      max: 3600000
-    spec.replicationFactor:
-      constraint: OneOf
-      values: ["3"]
+  targetKind: Topic
+  description: Standard topic creation rules
+  rules:
+    - condition: "metadata.labels[\"data-criticality\"] in [\"C0\", \"C1\", \"C2\"]"
+      errorMessage: "data-criticality label must be one of C0, C1, C2"
+    - condition: "int(string(spec.configs[\"retention.ms\"])) >= 60000 && int(string(spec.configs[\"retention.ms\"])) <= 3600000"
+      errorMessage: "retention.ms must be between 1m and 1h"
+    - condition: "spec.replicationFactor == 3"
+      errorMessage: "replication factor must be 3"
 ---
 apiVersion: self-serve/v1
-kind: TopicPolicy
+kind: ResourcePolicy
 metadata:
   name: clickstream-naming-rule
 spec:
-  policies:
-    metadata.name:
-      constraint: Match
-      pattern: ^click\.(?<event>[a-z0-9-]+)\.(avro|json)$
+  targetKind: Topic
+  rules:
+    - condition: "metadata.name.matches(\"^click\\\\.[a-z0-9-]+\\\\.(avro|json)$\")"
+      errorMessage: "topic name must match ^click.<event>.(avro|json)"
 ```
+
+CEL tips:
+- Config values are strings: use `int(string(spec.configs["retention.ms"]))` for numeric comparisons.
+- Dotted or dashed keys need bracket notation: `metadata.labels["data-criticality"]`.
+- Check optional fields with `has()`: `has(metadata.labels.criticality) && metadata.labels["criticality"] in ["C0"]`.
 
 ## How to create
 
@@ -115,7 +110,7 @@ conduktor apply -f my-topic.yaml
 
 The CLI validates your topic against:
 1. Ownership -- topic name must match an owned `resources[].name` + `patternType` in your ApplicationInstance.
-2. TopicPolicy -- all constraints from referenced policies must pass.
+2. ResourcePolicy -- all CEL rules from referenced policies with `targetKind: Topic` must pass.
 3. Kafka -- partition count, replication factor, and configs are validated against the broker using `validateOnly`.
 
 ### Via Console UI
@@ -135,7 +130,7 @@ If `metadata.catalogVisibility` is not set on the topic, it inherits from `Appli
 ## Common mistakes
 
 - **Name does not match ownership prefix.** If your ApplicationInstance owns `click.` with `PREFIXED`, topic name must start with `click.`. A name like `clicks.foo` will be rejected.
-- **Policy violation on missing label.** If a TopicPolicy enforces `metadata.labels.data-criticality` without `optional: true`, you must include that label.
+- **Policy violation on missing label.** If a ResourcePolicy rule checks `metadata.labels["data-criticality"]` without a `has()` guard, you must include that label.
 - **Config values must be strings.** Kafka configs in `spec.configs` are string values: `retention.ms: '60000'` not `retention.ms: 60000`.
 - **Partitions and replicationFactor are immutable.** You cannot change them after the topic is created. Plan ahead.
 - **Overlapping ownership.** Two ApplicationInstances cannot own overlapping prefixes on the same cluster. If `click.` is taken, `click.orders.` cannot be owned by another instance.

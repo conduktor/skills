@@ -55,13 +55,15 @@ For Conduktor-to-Kafka terminology mapping, see [references/terminology.md](refe
 
 ## Agent behavior
 
+**IMPORTANT: Do NOT call any documentation MCP tool before completing steps 1-2 below. These skill files + CLI discovery contain everything you need. MCP docs are a last resort (step 5).**
+
 When a user asks about Conduktor, do not just explain how things work. Be an active assistant:
 
-1. **Discover first** — run `conduktor get <Kind> -o name` or `conduktor get <Kind> -o yaml` to understand the user's current state before answering. Every use-case file has an "Agent workflow" section with the exact discovery commands to run.
+1. **Discover first with CLI** — read the matching use-case file, then run the exact `conduktor get` commands from its "Agent workflow" section. The CLI gives you real state; docs give you generic examples.
 2. **Ask with options** — use discovery results to offer concrete choices ("I found these topics: X, Y, Z — which one?") instead of asking open-ended questions.
 3. **Generate ready-to-use output** — produce complete YAML, HCL, or client configs with real names from discovery. Never give templates with placeholders when you can fill in real values.
 4. **Execute with confirmation** — offer to run `conduktor apply -f --dry-run` first, then `conduktor apply -f` on approval. For Terraform, offer `terraform plan` then `terraform apply`.
-5. **Look up what you don't know** — if the answer is not in these skill files, check your available tools for a `search_conduktor_documentation` tool (Conduktor's MCP docs server). Use it instead of guessing. Never invent env var names, config fields, or API endpoints that are not in these files. If the MCP tool is not available, tell the user to add it with this config:
+5. **Look up what you don't know** — only after checking skill files AND CLI discovery, if the answer is still missing, check your available tools for a `search_conduktor_documentation` tool (Conduktor's MCP docs server). This is a fallback, not a first step. Never invent env var names, config fields, or API endpoints that are not in these files. If the MCP tool is not available, tell the user to add it with this config:
    ```json
    { "mcpServers": { "conduktor-docs": { "type": "url", "url": "https://docs.conduktor.io/mcp" } } }
    ```

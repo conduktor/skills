@@ -144,3 +144,22 @@ metadata:
     username: null
 spec: ...
 ```
+
+## 10. Using TopicPolicy instead of ResourcePolicy
+
+**Wrong:**
+```bash
+conduktor get TopicPolicy -o yaml
+```
+```yaml
+kind: TopicPolicy
+```
+**Why:** TopicPolicy is deprecated. It only supports topics and uses rigid constraint types (OneOf, Range, Match). ResourcePolicy replaces it with CEL expressions and supports Topic, Connector, Subject, and ApplicationGroup.
+**Correct:**
+```bash
+conduktor get ResourcePolicy -o yaml
+```
+```yaml
+kind: ResourcePolicy
+```
+Use `spec.policyRef` on ApplicationInstance, not `spec.topicPolicyRef`.

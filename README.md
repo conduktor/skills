@@ -48,7 +48,7 @@ Once installed, just ask. The agent doesn't just explain — it discovers your e
 | "Encrypt PII fields in my Kafka topics" | Discovers your interceptors and topics via CLI, asks which fields, generates EncryptPlugin YAML, offers `conduktor apply` |
 | "Set up team isolation" | Lists existing virtual clusters, asks how many teams, generates VirtualCluster + ServiceAccount + Group YAML |
 | "I need access to the payments topic" | Discovers topics and your ApplicationInstance, identifies the owner, generates the permission YAML |
-| "Create a topic for my service" | Checks your AppInstance's TopicPolicy constraints, asks topic name and config, validates, applies |
+| "Create a topic for my service" | Checks your AppInstance's ResourcePolicy constraints, asks topic name and config, validates, applies |
 | "Write Terraform for our Conduktor setup" | Exports current resources via CLI, generates matching HCL, offers `terraform plan` |
 
 ## MCP Documentation Server

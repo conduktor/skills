@@ -209,8 +209,7 @@ metadata:
 spec:
   cluster: "shadow-it"            # immutable
   serviceAccount: "sa-clicko"     # unique per cluster
-  topicPolicyRef: ["generic-dev-topic"]
-  policyRef: []                   # links to ResourcePolicy
+  policyRef: ["generic-dev-topic"]  # links to ResourcePolicy
   defaultCatalogVisibility: PUBLIC
   resources:
     - { type: TOPIC, patternType: PREFIXED, name: "click." }
@@ -225,41 +224,34 @@ spec:
 - Resource names must not overlap with other ApplicationInstances on the same cluster.
 - Kafka side effects: SA gets ACLs -- Topic: `READ`, `WRITE`, `DESCRIBE_CONFIGS`; ConsumerGroup: `READ`.
 
-### TopicPolicy
-
-Constrains topic creation. Linked via `spec.topicPolicyRef` on ApplicationInstance. Not applied automatically.
-
-```yaml
-apiVersion: self-serve/v1
-kind: TopicPolicy
-metadata:
-  name: "generic-dev-topic"
-spec:
-  policies:
-    metadata.labels.data-criticality: { constraint: OneOf, values: ["C0", "C1", "C2"] }
-    spec.configs.retention.ms: { constraint: Range, min: 60000, max: 3600000 }
-    spec.replicationFactor: { constraint: OneOf, values: ["3"] }
-    metadata.name: { constraint: Match, pattern: "^click\\.(?<event>[a-z0-9-]+)\\.(avro|json)$" }
-```
-
-Policy paths: `metadata.name`, `metadata.labels.<key>`, `spec.partitions`, `spec.replicationFactor`, `spec.configs.<key>`.
-**Constraints**: `Range` (min/max inclusive), `OneOf`, `NoneOf`, `Match` (regex), `AllowedKeys` (dict keys). Can be `optional: true`.
-
 ### ResourcePolicy
 
-CEL-expression-based enforcement. `spec.targetKind`: `Topic`, `Connector`, `Subject`, or `ApplicationGroup`. Linked via `spec.policyRef`. Rules use `condition` (CEL expr) + `errorMessage`.
+CEL-expression-based policy enforcement. Replaces the legacy TopicPolicy. `spec.targetKind`: `Topic`, `Connector`, `Subject`, or `ApplicationGroup`. Linked via `spec.policyRef` on ApplicationInstance. Rules use `condition` (CEL expr) + `errorMessage`.
 
 ```yaml
 apiVersion: self-serve/v1
 kind: ResourcePolicy
 metadata:
   name: "generic-dev-topic"
+  labels:
+    business-unit: delivery
 spec:
   targetKind: Topic
+  description: A policy for topic creation standards
   rules:
-    - { condition: "spec.replicationFactor == 3", errorMessage: "replication factor should be 3" }
-    - { condition: "int(string(spec.configs[\"retention.ms\"])) >= 60000", errorMessage: "retention too low" }
+    - condition: "spec.replicationFactor == 3"
+      errorMessage: "replication factor should be 3"
+    - condition: "int(string(spec.configs[\"retention.ms\"])) >= 60000 && int(string(spec.configs[\"retention.ms\"])) <= 3600000"
+      errorMessage: "retention should be between 1m and 1h"
+    - condition: "metadata.labels[\"data-criticality\"] in [\"C0\", \"C1\", \"C2\"]"
+      errorMessage: "data-criticality should be one of C0, C1, C2"
 ```
+
+CEL tips: use `int(string(...))` for config values, bracket notation for dotted/dashed keys, `has(field)` for optional checks.
+
+### TopicPolicy (deprecated — do not use)
+
+Legacy constraint-based policy for topics only. Replaced by ResourcePolicy. Do not run `conduktor get TopicPolicy` or generate TopicPolicy YAML — always use ResourcePolicy instead. Both `topicPolicyRef` and `policyRef` can coexist on ApplicationInstance during migration, but new configs should only use `policyRef`.
 
 ### ApplicationInstancePermission
 

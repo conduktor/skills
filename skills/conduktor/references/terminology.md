@@ -18,7 +18,7 @@
 | apiVersion | Scope | Example kinds |
 |---|---|---|
 | `gateway/v2` | Gateway resources | Interceptor, VirtualCluster, GatewayServiceAccount, GatewayGroup, AliasTopic, ConcentrationRule |
-| `self-serve/v1` | Self-service | Application, ApplicationInstance, ApplicationInstancePermission, ApplicationGroup, TopicPolicy, ResourcePolicy |
+| `self-serve/v1` | Self-service | Application, ApplicationInstance, ApplicationInstancePermission, ApplicationGroup, ResourcePolicy, TopicPolicy (deprecated) |
 | `kafka/v2` | Console Kafka resources | Topic |
 | `v2` | Console resources | Group, User, KafkaCluster, KafkaConnect, ServiceAccount |
 | `v1` | Data quality | DataQualityRule, DataQualityPolicy |

@@ -299,8 +299,8 @@ resource "conduktor_generic" "alice" {
 | `conduktor_console_ksqldb_cluster_v2` | ksqlDB cluster connection |
 | `conduktor_console_service_account_v1` | Console service account |
 | `conduktor_console_connector_v2` | Kafka Connect connector |
-| `conduktor_console_topic_policy_v1` | Topic naming/config policy |
-| `conduktor_console_resource_policy_v1` | Resource access policy |
+| `conduktor_console_topic_policy_v1` | Topic policy (deprecated, use resource_policy) |
+| `conduktor_console_resource_policy_v1` | CEL-based policy for Topic, Connector, Subject |
 | `conduktor_console_partner_zone_v2` | Partner zone for external access |
 | `conduktor_console_application_v1` | Application definition |
 | `conduktor_console_application_group_v1` | Application group |
