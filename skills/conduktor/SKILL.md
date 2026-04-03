@@ -42,6 +42,7 @@ For Conduktor-to-Kafka terminology mapping, see [references/terminology.md](refe
 | Set up multi-tenancy (virtual clusters, ACLs, service accounts) | [use-cases/platform/multi-tenancy.md](use-cases/platform/multi-tenancy.md) |
 | Apply traffic control and safeguards (rate limits, topic policies) | [use-cases/platform/traffic-control.md](use-cases/platform/traffic-control.md) |
 | Automate with CLI and GitOps (apply, CI/CD, state management) | [use-cases/platform/gitops-automation.md](use-cases/platform/gitops-automation.md) |
+| Bootstrap self-service from existing clusters, topics, and permissions | [use-cases/platform/bootstrap-self-service-cli.md](use-cases/platform/bootstrap-self-service-cli.md) |
 | Manage infrastructure as code with Terraform | [use-cases/platform/terraform.md](use-cases/platform/terraform.md) |
 
 ### Application developer
@@ -80,6 +81,7 @@ When a user mentions these keywords, load the corresponding file:
 - **rate limit, throttle, safeguard, quota, traffic** -> `use-cases/platform/traffic-control.md`
 - **deploy, Docker, Helm, Kubernetes, install** -> `use-cases/platform/deploy-conduktor.md`
 - **conduktor CLI, apply, GitOps, CI/CD, pipeline, automation** -> `use-cases/platform/gitops-automation.md`
+- **bootstrap, self-service, adopt, migrate, ownership, reverse-engineer** -> `use-cases/platform/bootstrap-self-service-cli.md`
 - **Terraform, IaC, HCL, provider** -> `use-cases/platform/terraform.md`
 - **onboard, connect, credentials, getting started, bootstrap** -> `use-cases/app-developer/onboard-to-kafka.md`
 - **create topic, new topic, self-service topic** -> `use-cases/app-developer/create-topic.md`
