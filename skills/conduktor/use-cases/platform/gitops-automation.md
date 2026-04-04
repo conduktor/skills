@@ -208,7 +208,11 @@ When state is enabled, `apply` compares the resource list in the YAML files agai
 
 ## CI/CD patterns
 
-### GitHub Actions example
+For the full self-service GitHub repo pattern (two-workflow structure, CODEOWNERS, token scoping, ResourcePolicy examples, onboarding checklist), see [self-service-github-cicd.md](self-service-github-cicd.md).
+
+### Simple single-workflow example
+
+For non-self-service use cases (e.g., managing Gateway interceptors or Console resources without the two-folder pattern):
 
 ```yaml
 name: Apply Conduktor resources

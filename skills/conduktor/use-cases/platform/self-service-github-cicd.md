@@ -1,0 +1,374 @@
+# Self-service GitHub CI/CD
+
+How to structure a GitHub repository for Conduktor self-service, where application teams manage their own Kafka resources through code while a platform team controls admin-level resources.
+
+## Repository structure
+
+```
+conduktor-self-service/
+├── .github/
+│   ├── CODEOWNERS
+│   └── workflows/
+│       ├── apply-platform.yml
+│       └── apply-apps.yml
+├── platform/                  # Admin resources (platform team only)
+│   ├── applications/          # Application + ApplicationInstance definitions
+│   │   └── <app>/
+│   │       ├── application.yml        # Application resource
+│   │       └── <env>.yml              # ApplicationInstance per environment
+│   ├── policies/              # ResourcePolicy rules
+│   └── exceptions/            # Policy exception overrides
+│       └── <app>/<env>/       # Applied with AdminToken to bypass policies
+├── applications/              # App-managed resources (each team owns their folder)
+│   └── <app>/
+│       └── <env>/
+│           ├── topics.yml
+│           ├── subjects.yml
+│           ├── connectors.yml
+│           ├── application-groups.yml
+│           └── instance-permissions.yml
+└── README.md
+```
+
+- **`platform/`** — admin resources that define self-service boundaries. Only the platform team modifies these. Applied with an **AdminToken**.
+- **`applications/`** — day-to-day Kafka resources and Console UI permissions that application teams own. Applied with scoped **ApplicationInstanceTokens**.
+- **`platform/exceptions/`** — resources that legitimately need to bypass a ResourcePolicy. Applied by the platform workflow with an AdminToken, which skips policy validation. The application team opens a PR here; only the platform team can approve (via CODEOWNERS).
+
+## Token types
+
+| Token Type | Scope | Use in CI/CD |
+|---|---|---|
+| **AdminToken** | Full platform access | Platform workflow (`apply-platform.yml`) only |
+| **ApplicationInstanceToken** | Scoped to a single application instance | Application workflows (`apply-apps.yml`) — one per app/env |
+
+**Do not use AdminTokens for application workflows.** ApplicationInstanceTokens enforce that a team can only modify resources within their own application instance boundaries.
+
+## GitHub Environments
+
+Create a GitHub Environment for each scope. Each stores its own `CONDUKTOR_API_KEY` secret and `CONDUKTOR_BASE_URL` variable.
+
+| GitHub Environment | Token Type | Description |
+|---|---|---|
+| `platform` | AdminToken | Applies platform resources |
+| `<app>-<env>` (e.g. `payments-dev`) | ApplicationInstanceToken | Scoped to that app/env |
+
+Each environment needs:
+- `CONDUKTOR_API_KEY` (secret) — AdminToken or ApplicationInstanceToken depending on scope
+- `CONDUKTOR_BASE_URL` (variable) — Console URL (per-environment if dev/stag/prod use different instances)
+- `CONDUKTOR_STATE_URI` (variable) — remote state storage for delete detection (S3/GCS/Azure Blob)
+
+For production environments, add deployment protection rules such as required reviewers or wait timers.
+
+## CODEOWNERS
+
+```
+# Platform team owns admin resources and CI/CD config
+/.github/                          @org/platform-team
+/platform/                         @org/platform-team
+/README.md                         @org/platform-team
+
+# Each application team owns their folder
+/applications/payments/            @org/payments-team @org/platform-team
+/applications/inventory/           @org/inventory-team @org/platform-team
+```
+
+Enable on `main`: require PR reviews, require Code Owner review, require status checks to pass.
+
+## Platform workflow (`apply-platform.yml`)
+
+Applies admin resources (applications, instances, policies, exceptions) using an AdminToken.
+
+```yaml
+name: Apply Platform Resources
+on:
+  push:
+    branches: [main]
+    paths: ['platform/**']
+  pull_request:
+    paths: ['platform/**']
+
+jobs:
+  apply-platform:
+    runs-on: ubuntu-latest
+    environment: platform
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      - name: Install Conduktor CLI
+        run: |
+          curl -sL https://github.com/conduktor/ctl/releases/latest/download/conduktor-linux-amd64 -o conduktor
+          chmod +x conduktor
+          sudo mv conduktor /usr/local/bin/
+
+      - name: ${{ github.event_name == 'pull_request' && 'Plan' || 'Apply' }} platform resources
+        run: |
+          conduktor apply \
+            -f platform/ -r \
+            --parallelism 5 \
+            --enable-state \
+            ${{ github.event_name == 'pull_request' && '--dry-run' || '' }}
+        env:
+          CDK_API_KEY: ${{ secrets.CONDUKTOR_API_KEY }}
+          CDK_BASE_URL: ${{ vars.CONDUKTOR_BASE_URL }}
+          CDK_STATE_REMOTE_URI: ${{ vars.CONDUKTOR_STATE_URI }}
+```
+
+## Application workflow (`apply-apps.yml`)
+
+Detects the changed `applications/<app>/<env>/` folder from the git diff and applies with the correct scoped token. Fails if changes span multiple app/env combinations.
+
+```yaml
+name: Apply Application Resources
+on:
+  push:
+    branches: [main]
+    paths: ['applications/**']
+  pull_request:
+    paths: ['applications/**']
+
+jobs:
+  detect:
+    runs-on: ubuntu-latest
+    outputs:
+      app: ${{ steps.find.outputs.app }}
+      env: ${{ steps.find.outputs.env }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - id: find
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            BASE=${{ github.event.pull_request.base.sha }}
+            HEAD=${{ github.event.pull_request.head.sha }}
+          else
+            BASE=${{ github.event.before }}
+            HEAD=${{ github.sha }}
+          fi
+
+          TARGETS=$(git diff --name-only "$BASE" "$HEAD" -- applications/ \
+            | awk -F'/' '{print $2 "/" $3}' \
+            | sort -u)
+
+          COUNT=$(echo "$TARGETS" | wc -l)
+          if [ "$COUNT" -ne 1 ]; then
+            echo "::error::Changes must be scoped to a single app/env folder. Found: $TARGETS"
+            exit 1
+          fi
+
+          APP=$(echo "$TARGETS" | cut -d/ -f1)
+          ENV=$(echo "$TARGETS" | cut -d/ -f2)
+          echo "app=$APP" >> "$GITHUB_OUTPUT"
+          echo "env=$ENV" >> "$GITHUB_OUTPUT"
+          echo "Detected target: $APP/$ENV"
+
+  apply:
+    needs: detect
+    runs-on: ubuntu-latest
+    environment: ${{ needs.detect.outputs.app }}-${{ needs.detect.outputs.env }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      - name: Install Conduktor CLI
+        run: |
+          curl -sL https://github.com/conduktor/ctl/releases/latest/download/conduktor-linux-amd64 -o conduktor
+          chmod +x conduktor
+          sudo mv conduktor /usr/local/bin/
+
+      - name: ${{ github.event_name == 'pull_request' && 'Plan' || 'Apply' }} resources
+        run: |
+          conduktor apply \
+            -f "applications/${{ needs.detect.outputs.app }}/${{ needs.detect.outputs.env }}" \
+            --parallelism 5 \
+            --enable-state \
+            ${{ github.event_name == 'pull_request' && '--dry-run' || '' }}
+        env:
+          CDK_API_KEY: ${{ secrets.CONDUKTOR_API_KEY }}
+          CDK_BASE_URL: ${{ vars.CONDUKTOR_BASE_URL }}
+          CDK_STATE_REMOTE_URI: ${{ vars.CONDUKTOR_STATE_URI }}
+```
+
+## How the workflows work
+
+**On pull request (plan):** `conduktor apply --dry-run` validates resources against the live instance. Policy violations surface here before merge.
+
+**On push to main (apply):** The workflow selects the corresponding GitHub Environment, providing the scoped `CONDUKTOR_API_KEY`. The CLI applies all YAML files, ordering resources by dependency. With `--enable-state`, resources removed from YAML are deleted from Conduktor.
+
+## Policy violations and exceptions
+
+Conduktor validates resources against any `ResourcePolicy` linked to the ApplicationInstance via `spec.policyRef`. If a rule fails:
+
+```
+Error applying Topic "orders.events":
+  Policy "topic-naming" violated: Topic name must follow the pattern <app>.<descriptive-name>
+```
+
+The dry-run step catches these before merge. For legitimate exceptions, place the resource in `platform/exceptions/<app>/<env>/` — the platform workflow applies it with an AdminToken, bypassing policies.
+
+## ResourcePolicy examples
+
+### Topic naming (`platform/policies/topic-naming.yml`)
+
+```yaml
+apiVersion: self-serve/v1
+kind: ResourcePolicy
+metadata:
+  name: topic-naming
+spec:
+  targetKind: Topic
+  description: "Enforces topic naming convention and required labels"
+  rules:
+    - condition: metadata.name.matches("^[a-z0-9-]+\\.[a-z0-9.-]+$")
+      errorMessage: "Topic name must follow the pattern <app>.<descriptive-name>"
+    - condition: has(metadata.labels.confidentiality) && metadata.labels["confidentiality"] in ["public", "internal", "restricted"]
+      errorMessage: "Topics must have a 'confidentiality' label set to one of: public, internal, restricted"
+```
+
+### Dev topic rules (`platform/policies/topic-rules-dev.yml`)
+
+```yaml
+apiVersion: self-serve/v1
+kind: ResourcePolicy
+metadata:
+  name: topic-rules-dev
+spec:
+  targetKind: Topic
+  description: "Relaxed topic rules for dev environments"
+  rules:
+    - condition: spec.replicationFactor >= 1
+      errorMessage: "Replication factor has to be at least 1"
+    - condition: spec.partitions >= 1 && spec.partitions <= 12
+      errorMessage: "Partition count has to be between 1 and 12"
+```
+
+### Prod topic rules (`platform/policies/topic-rules-prod.yml`)
+
+```yaml
+apiVersion: self-serve/v1
+kind: ResourcePolicy
+metadata:
+  name: topic-rules-prod
+spec:
+  targetKind: Topic
+  description: "Strict topic rules for production environments"
+  rules:
+    - condition: spec.replicationFactor == 3
+      errorMessage: "Replication factor has to be exactly 3 in production"
+    - condition: spec.partitions >= 3
+      errorMessage: "Topics have to have at least 3 partitions in production"
+    - condition: "\"retention.ms\" in spec.configs && int(string(spec.configs[\"retention.ms\"])) >= 3600000"
+      errorMessage: "Retention has to be explicitly set and at least 1 hour in production"
+    - condition: "\"min.insync.replicas\" in spec.configs && int(string(spec.configs[\"min.insync.replicas\"])) >= 2"
+      errorMessage: "min.insync.replicas has to be at least 2 in production"
+```
+
+### Subject rules (`platform/policies/subject-rules.yml`)
+
+```yaml
+apiVersion: self-serve/v1
+kind: ResourcePolicy
+metadata:
+  name: subject-rules
+spec:
+  targetKind: Subject
+  description: "Enforces subject naming and compatibility standards"
+  rules:
+    - condition: metadata.name.matches("^[a-z0-9-]+\\.[a-z0-9.-]+-(?:key|value)$")
+      errorMessage: "Subject name must end with -key or -value suffix"
+    - condition: has(spec.compatibility) && spec.compatibility in ["BACKWARD", "BACKWARD_TRANSITIVE", "FORWARD", "FORWARD_TRANSITIVE", "FULL", "FULL_TRANSITIVE"]
+      errorMessage: "Compatibility level has to be explicitly set and cannot be NONE"
+```
+
+### Connector rules (`platform/policies/connector-rules.yml`)
+
+```yaml
+apiVersion: self-serve/v1
+kind: ResourcePolicy
+metadata:
+  name: connector-rules
+spec:
+  targetKind: Connector
+  description: "Restricts connector plugin classes and task limits"
+  rules:
+    - condition: >
+        spec.config["connector.class"] in [
+          "io.connect.jdbc.JdbcSourceConnector",
+          "io.connect.jdbc.JdbcSinkConnector",
+          "io.debezium.connector.postgresql.PostgresConnector",
+          "org.apache.kafka.connect.mirror.MirrorSourceConnector",
+          "com.amazonaws.kafka.connect.s3.S3SinkConnector"
+        ]
+      errorMessage: "Only approved connector classes are allowed — contact the platform team to request a new class"
+    - condition: int(spec.config["tasks.max"]) <= 8
+      errorMessage: "tasks.max cannot exceed 8"
+```
+
+### ApplicationGroup restrictions (`platform/policies/appgroup-restrictions.yml`)
+
+```yaml
+apiVersion: self-serve/v1
+kind: ResourcePolicy
+metadata:
+  name: appgroup-restrictions
+spec:
+  targetKind: ApplicationGroup
+  description: "Enforces group-based membership and restricts production permissions"
+  rules:
+    - condition: "!has(spec.members) || spec.members.size() == 0"
+      errorMessage: "Direct user membership is not allowed — use externalGroups to manage membership via your identity provider"
+    - condition: >
+        spec.permissions
+            .filter(p, p.appInstance.endsWith("-prod") && p.resourceType == "TOPIC")
+            .all(p, p.permissions.all(perm, perm in ["topicConsume", "topicViewConfig", "topicDataQualityManage"]))
+      errorMessage: "For production topics, only consume, view config, and manage data quality are allowed"
+```
+
+## Onboarding a new application
+
+**Platform team:**
+
+1. Create `platform/applications/<app>/application.yml` (Application resource with `spec.owner` pointing to a Console Group)
+2. Create `platform/applications/<app>/<env>.yml` for each environment (ApplicationInstance with cluster, serviceAccount, policyRef, resources)
+3. Create GitHub Environments (`<app>-<env>`) with an ApplicationInstanceToken as `CONDUKTOR_API_KEY`
+4. Add CODEOWNERS entry: `/applications/<app>/  @org/<app>-team @org/platform-team`
+5. Grant the team repo write access
+
+**Application team:**
+
+1. Create `applications/<app>/<env>/` folders with `topics.yml`, `application-groups.yml`, etc.
+2. Define resources within the boundaries set by the platform team (topic prefixes, policies)
+3. Open a PR — dry-run validates. After review and merge, resources are applied automatically.
+
+No workflow changes needed — the detection logic handles new applications automatically.
+
+## Labels convention
+
+| Label | Purpose | Example |
+|---|---|---|
+| `env` | Environment identifier | `dev`, `stag`, `prod` |
+| `business-unit` | Organizational grouping | `finance`, `risk`, `logistics` |
+| `confidentiality` | Data classification | `public`, `internal`, `restricted` |
+| `team` | Owning team | `payments-team` |
+
+## Common mistakes
+
+| Mistake | Fix |
+|---|---|
+| Using AdminToken for application workflows | Use ApplicationInstanceTokens — they enforce app/env boundaries |
+| Changes spanning multiple app/env folders in one PR | The `apply-apps.yml` workflow validates a single folder per PR. Split into separate PRs. |
+| Not creating GitHub Environments before merging the first PR | The workflow selects a GitHub Environment by name. Missing environments cause failures. |
+| Applying exceptions through the app workflow | Exceptions must go through `platform/exceptions/` and the platform workflow (AdminToken bypasses policies) |
+| Missing CODEOWNERS entry for a new app | Without it, anyone can approve changes to the application folder |

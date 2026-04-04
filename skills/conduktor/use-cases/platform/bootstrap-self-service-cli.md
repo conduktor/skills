@@ -4,58 +4,70 @@
 
 1. Run `conduktor token list admin` to verify CLI auth with an AdminToken
 2. If not authenticated, help configure `CDK_BASE_URL` + `CDK_API_KEY`
-3. Export the full Console state — run all discovery commands in parallel:
-   - `conduktor get KafkaCluster -o yaml` — clusters and their IDs
-   - `conduktor get Topic -o yaml` — all topics across clusters
-   - `conduktor get Group -o yaml` — Console groups with their cluster-scoped permissions
-   - `conduktor get User -o yaml` — users and their group memberships
-   - `conduktor get ServiceAccount -o yaml` — service accounts and their Kafka ACLs
-4. Analyze the exported resources and present findings to the user:
+3. Export global Console resources and discover clusters:
+   - `conduktor get all -c -o yaml` — global resources: KafkaClusters, Groups, and any existing self-service resources (does NOT include cluster-scoped resources like Topics, ServiceAccounts, Subjects, or Connectors)
+   - Parse the output for `kind: KafkaCluster` entries to get all cluster IDs
+4. Export cluster-scoped resources — for each cluster discovered in step 3, run in parallel:
+   - `conduktor get Topic --cluster <cluster-id> -o yaml` — all topics on this cluster
+   - `conduktor get ServiceAccount --cluster <cluster-id> -o yaml` — service accounts and their Kafka ACLs on this cluster
+   - `conduktor get Subject --cluster <cluster-id> -o yaml` — schema registry subjects on this cluster
+   - `conduktor get KafkaConnectCluster --cluster <cluster-id> -o yaml` — Kafka Connect clusters registered on this cluster
+   - Then for each connect cluster: `conduktor get Connector --cluster <cluster-id> --connectCluster <connect-cluster-id> -o yaml` — connectors (requires both `--cluster` and `--connectCluster`)
+5. Analyze the exported resources and present findings to the user:
    - **Clusters**: list each cluster ID and its topic count
    - **Topic ownership candidates**: group topics by naming prefix (e.g., `payments.*`, `inventory.*`) and propose each prefix group as a candidate Application
    - **Service account mapping**: for each service account, list which topic prefixes its ACLs cover — these map to ApplicationInstance `serviceAccount` fields
    - **Group permissions**: for each Console Group, list which clusters and topic patterns it has access to — these inform ApplicationGroup definitions
    - **Cross-team consumption**: identify service accounts or groups that have READ access to topics outside their primary prefix — these become ApplicationInstancePermission candidates
-5. Ask the user to confirm or adjust the proposed application boundaries:
+6. Ask the user to confirm or adjust the proposed application boundaries:
    - Which prefix groups should be merged or split?
    - What should each Application be named?
    - Which environments exist (dev/stag/prod) and how do they map to clusters?
    - Which Console Groups map to which Applications?
-6. Ask the user for a target directory (default: `conduktor-self-service/`)
-7. Generate the complete self-service resource set:
+7. Ask the user for a target directory (default: `conduktor-self-service/`)
+8. Generate the complete self-service resource set (see [self-service-github-cicd.md](self-service-github-cicd.md) for repo structure, workflows, CODEOWNERS, and ResourcePolicy examples):
    - `Application` for each confirmed team/service boundary
    - `ApplicationInstance` for each app/cluster combination with resource prefixes derived from topic naming, service account from ACL analysis, and env labels from cluster mapping
    - `ApplicationInstancePermission` for each cross-team consumption pattern discovered
    - `ApplicationGroup` for each Console Group mapped to an Application, with permissions scoped to the correct ApplicationInstance
    - `ResourcePolicy` stubs based on observed topic configurations (partition ranges, replication factors, naming patterns)
-   - `Topic` resources for each discovered topic, placed in the correct `applications/<app>/<env>/` folder
-8. Generate supporting files: `README.md`, `.github/CODEOWNERS`, `.github/workflows/apply-platform.yml`, `.github/workflows/apply-apps.yml`
+   - `Topic`, `Subject`, and `Connector` resources placed in the correct `applications/<app>/<env>/` folder
+   - Supporting files: `README.md`, `.github/CODEOWNERS`, `.github/workflows/apply-platform.yml`, `.github/workflows/apply-apps.yml`
 9. Present a summary of everything generated and offer to review any file
 10. Offer to dry-run the platform resources: `conduktor apply -f platform/ -r --dry-run`
 
 ## When to use this
 
-- Existing Conduktor Console deployment with clusters, topics, groups, and service accounts — but no self-service resources yet (no Applications, ApplicationInstances, or ResourcePolicies).
-- Platform team wants to adopt the self-service model and needs to reverse-engineer ownership boundaries from the current state.
+- Existing Conduktor Console deployment with clusters, topics, groups, and service accounts — but no self-service resources yet.
+- Platform team wants to reverse-engineer ownership boundaries from the current state.
 - Migrating from manual Console RBAC to the declarative self-service framework with GitOps.
 
 ## How it works
 
 ### 1. Discovery: what the CLI tells you
 
-Each `conduktor get` command reveals a different ownership signal:
+The CLI has two scopes: **global** resources (fetched via `conduktor get all -c`) and **cluster-scoped** resources (require `--cluster <id>`).
+
+**Global resources** (`conduktor get all -c -o yaml`):
+
+| Kind | What it reveals | Ownership signal |
+|---|---|---|
+| `KafkaCluster` | Cluster IDs and configs | Environment boundaries (dev-cluster, prod-cluster) |
+| `Group` | Console Groups with cluster-scoped permissions | Which humans can see/manage which topics |
+
+**Cluster-scoped resources** (for each cluster):
 
 | Command | What it reveals | Ownership signal |
 |---|---|---|
-| `conduktor get KafkaCluster -o yaml` | Cluster IDs and configs | Environment boundaries (dev-cluster, prod-cluster) |
-| `conduktor get Topic -o yaml` | All topics with `metadata.cluster` | Naming prefixes reveal team ownership (`payments.*`, `orders.*`) |
-| `conduktor get ServiceAccount -o yaml` | SAs with Kafka ACLs per cluster | ACL prefixes show which SA owns which topics |
-| `conduktor get Group -o yaml` | Console Groups with cluster-scoped permissions | Which humans can see/manage which topics |
-| `conduktor get User -o yaml` | Users and their group memberships | Validates group-to-team mapping |
+| `conduktor get Topic --cluster <id> -o yaml` | All topics on this cluster | Naming prefixes reveal team ownership |
+| `conduktor get ServiceAccount --cluster <id> -o yaml` | SAs with Kafka ACLs on this cluster | ACL prefixes show which SA owns which topics |
+| `conduktor get Subject --cluster <id> -o yaml` | Schema registry subjects | Schema ownership follows topic ownership |
+| `conduktor get KafkaConnectCluster --cluster <id> -o yaml` | Connect clusters on this Kafka cluster | Needed to discover connectors |
+| `conduktor get Connector --cluster <id> --connectCluster <cc> -o yaml` | Connectors on a connect cluster | Connector naming reveals team ownership |
 
 ### 2. Inferring ownership from topic prefixes
 
-Topics typically follow a naming convention like `<team>.<domain>` or `<service>.<entity>`. Group topics by their first segment to find natural ownership boundaries:
+Group topics by their first segment to find natural ownership boundaries:
 
 ```
 payments.transactions       ─┐
@@ -65,10 +77,6 @@ payments.refunds            ─┘
 inventory.stock-levels      ─┐
 inventory.reservations      ─┤── candidate Application: "inventory"
 inventory.warehouse-events  ─┘
-
-notifications.email         ─┐
-notifications.sms           ─┤── candidate Application: "notifications"
-notifications.push          ─┘
 ```
 
 Not all topics fit cleanly. Shared topics, legacy names, or flat naming schemes need the user to manually assign ownership.
@@ -116,161 +124,14 @@ Ask the user how clusters map to environments. Common patterns:
 
 This mapping determines the `metadata.labels.env` on each ApplicationInstance and the folder structure under `applications/<app>/<env>/`.
 
-### 6. Generated self-service resources
+### 6. Rollout strategy
 
-#### Application (one per team/service)
-
-```yaml
-apiVersion: self-serve/v1
-kind: Application
-metadata:
-  name: payments
-  labels:
-    business-unit: <ask-user>
-spec:
-  title: "Payments"
-  owner: "payments-group"   # Console Group technical-id that owns this app
-```
-
-#### ApplicationInstance (one per app per cluster/env)
-
-```yaml
-apiVersion: self-serve/v1
-kind: ApplicationInstance
-metadata:
-  name: payments-prod
-  application: payments
-  labels:
-    env: prod
-spec:
-  cluster: prod-cluster
-  serviceAccount: sa-payments-prod    # from SA ACL analysis
-  resources:
-    - type: TOPIC
-      name: "payments."
-      patternType: PREFIXED
-    - type: CONSUMER_GROUP
-      name: "payments."
-      patternType: PREFIXED
-    - type: SUBJECT
-      name: "payments."
-      patternType: PREFIXED
-```
-
-Resource prefixes are derived from the topic naming analysis. Consumer group and subject prefixes default to matching the topic prefix unless the SA ACLs indicate otherwise.
-
-#### ApplicationInstancePermission (for cross-team consumers)
-
-```yaml
-apiVersion: self-serve/v1
-kind: ApplicationInstancePermission
-metadata:
-  application: payments
-  appInstance: payments-prod
-  name: payments-prod-to-notifications-prod
-spec:
-  resource:
-    type: TOPIC
-    name: "payments."
-    patternType: PREFIXED
-  userPermission: READ
-  serviceAccountPermission: READ
-  grantedTo: notifications-prod
-```
-
-Generated when a service account has READ ACLs on topics outside its own ownership prefix.
-
-#### ApplicationGroup (from Console Group permissions)
-
-```yaml
-apiVersion: self-serve/v1
-kind: ApplicationGroup
-metadata:
-  application: payments
-  name: payments-developers-prod
-spec:
-  displayName: "Payments Developers (prod)"
-  permissions:
-    - appInstance: payments-prod
-      resourceType: TOPIC
-      patternType: LITERAL
-      name: "*"
-      permissions:
-        - topicViewConfig
-        - topicConsume
-  externalGroups:
-    - <idp-group-if-known>
-```
-
-Permissions are translated from the Console Group's cluster-scoped permissions. If the existing group uses SSO/LDAP, `externalGroups` is populated; otherwise the agent flags that the user should configure identity provider group mapping.
-
-#### ResourcePolicy (stubs from observed topic configs)
-
-The agent analyzes discovered topics to propose baseline policies:
-
-```yaml
-apiVersion: self-serve/v1
-kind: ResourcePolicy
-metadata:
-  name: topic-naming
-spec:
-  targetKind: Topic
-  rules:
-    - condition: metadata.name.matches("^[a-z0-9-]+\\.[a-z0-9.-]+$")
-      errorMessage: "Topic name must follow <app>.<descriptive-name> pattern"
-```
-
-Additional policy stubs are generated based on observed ranges (e.g., partition counts, replication factors, retention values) across discovered topics. These are marked as suggestions for the platform team to review and tune.
-
-### 7. Generated repo structure and supporting files
-
-```
-conduktor-self-service/
-├── .github/
-│   ├── CODEOWNERS
-│   └── workflows/
-│       ├── apply-platform.yml
-│       └── apply-apps.yml
-├── platform/
-│   ├── applications/
-│   │   └── <name>.yml
-│   ├── instances/
-│   │   └── <name>.yml
-│   ├── policies/
-│   │   └── <name>.yml
-│   └── exceptions/
-│       └── <app>/
-│           └── <env>/
-│               └── topics.yml
-├── applications/
-│   └── <app>/
-│       └── <env>/
-│           ├── topics.yml
-│           ├── application-groups.yml
-│           └── instance-permissions.yml
-└── README.md
-```
-
-The `platform/exceptions/` folder holds resources that legitimately need to bypass a ResourcePolicy (e.g., a topic requiring more partitions than the policy allows). These are applied by the platform workflow with an AdminToken, which skips policy validation. Exception files are only created when the user identifies specific resources that need policy overrides — the bootstrap process does not generate exceptions by default.
-
-#### README content
-
-The generated README includes:
-
-- **Overview** — what this repo manages, the two-folder (`platform/` and `applications/`) structure, and the PR-based workflow
-- **For platform teams** — how to onboard a new application (create Application + ApplicationInstance + GitHub Environment + CODEOWNERS entry), manage policies, approve exceptions
-- **For application teams** — how to add/modify topics, subjects, connectors, application groups, and instance permissions within their folder; the PR workflow (dry-run on PR, apply on merge); how to request policy exceptions
-- **GitHub Environments setup** — table of required environments and secrets (`CONDUKTOR_API_KEY` per app/env, `CONDUKTOR_BASE_URL`, `CONDUKTOR_STATE_URI`)
-- **Discovered policies** — list of generated ResourcePolicies with their rules, so teams understand what constraints apply
-
-### 8. Rollout strategy
-
-Self-service resources should be applied in dependency order. Recommended sequence:
+Self-service resources should be applied in dependency order:
 
 1. **ResourcePolicies** — define guardrails before anything else
 2. **Applications** — create the logical groupings
 3. **ApplicationInstances** — bind apps to clusters (this creates Kafka ACLs for the service accounts)
-4. **Topics** — declare existing topics under self-service ownership (idempotent, no changes to Kafka)
+4. **Topics, Subjects, Connectors** — declare existing resources under self-service ownership (idempotent)
 5. **ApplicationGroups** — migrate Console UI permissions to self-service managed groups
 6. **ApplicationInstancePermissions** — formalize cross-team access
 
@@ -280,11 +141,11 @@ The agent offers to `--dry-run` each step before applying.
 
 | Mistake | Fix |
 |---|---|
-| Running discovery with an ApplicationInstanceToken instead of AdminToken | Bootstrap requires full visibility. Use an AdminToken for all `conduktor get` commands. |
+| Running discovery with an ApplicationInstanceToken instead of AdminToken | Bootstrap requires full visibility. Use an AdminToken for all discovery commands. |
+| Using `conduktor get all -c` and expecting Topics/ServiceAccounts | `get all` only returns global resources. Topics, ServiceAccounts, Subjects, and Connectors are cluster-scoped — fetch them per cluster with `--cluster <id>`. |
 | Assigning a topic to the wrong Application based on prefix alone | Validate with service account ACLs — the SA with WRITE access is the true owner. |
 | Missing cross-team READ patterns | Check all SA ACLs for READ on prefixes they don't own. Each one needs an ApplicationInstancePermission. |
 | Creating ApplicationInstances with overlapping resource prefixes on the same cluster | Resource prefixes must not overlap between ApplicationInstances on the same cluster. Resolve conflicts before applying. |
 | Forgetting to set `serviceAccount` on ApplicationInstance | Each instance needs a unique SA per cluster. Conduktor creates Kafka ACLs for this SA automatically. |
 | Applying ApplicationGroups before the Application and ApplicationInstance exist | Resources must be applied in dependency order: Application → ApplicationInstance → ApplicationGroup. |
 | Treating Console Group permissions as the only ownership signal | Console Groups control UI access only. Service account ACLs are the authoritative Kafka-level ownership signal. |
-| Not creating GitHub Environments before merging the first PR | The `apply-apps.yml` workflow selects a GitHub Environment by name. Missing environments cause the workflow to fail. |
