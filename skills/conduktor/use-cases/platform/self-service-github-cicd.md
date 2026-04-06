@@ -45,7 +45,7 @@ conduktor-self-service/
 
 ## GitHub Environments
 
-Create a GitHub Environment for each scope. Each stores its own `CONDUKTOR_API_KEY` secret and `CONDUKTOR_BASE_URL` variable.
+Create a GitHub Environment for each scope. Each stores its own secrets and variables that the workflow maps to CLI env vars.
 
 | GitHub Environment | Token Type | Description |
 |---|---|---|
@@ -53,21 +53,38 @@ Create a GitHub Environment for each scope. Each stores its own `CONDUKTOR_API_K
 | `<app>-<env>` (e.g. `payments-dev`) | ApplicationInstanceToken | Scoped to that app/env |
 
 Each environment needs:
-- `CONDUKTOR_API_KEY` (secret) — AdminToken or ApplicationInstanceToken depending on scope
-- `CONDUKTOR_BASE_URL` (variable) — Console URL (per-environment if dev/stag/prod use different instances)
-- `CONDUKTOR_STATE_URI` (variable) — remote state storage for delete detection (S3/GCS/Azure Blob)
+- `CDK_API_KEY` (secret) — AdminToken or ApplicationInstanceToken depending on scope
+- `CDK_BASE_URL` (variable) — Console URL (per-environment if dev/stag/prod use different instances)
+- `CDK_STATE_REMOTE_URI` (variable) — per-app/env remote state path (e.g. `s3://conduktor-state/payments/dev/`)
+- `AWS_ROLE_ARN` (variable) — IAM role scoped to this environment's state path (see State isolation below)
 
 For production environments, add deployment protection rules such as required reviewers or wait timers.
+
+### State isolation
+
+Each app/env gets its own state file and cloud IAM role. This prevents one application's workflow from reading or writing another application's state, even if environment variables are exfiltrated.
+
+**AWS (S3):** Create an IAM role per app/env with a trust policy pinned to the GitHub Environment via OIDC, and an S3 policy scoped to that app's state prefix:
+
+```json
+{
+  "Effect": "Allow",
+  "Action": ["s3:GetObject", "s3:PutObject"],
+  "Resource": "arn:aws:s3:::conduktor-state/payments/dev/*"
+}
+```
+
+The workflows use GitHub OIDC federation (`aws-actions/configure-aws-credentials` with `role-to-assume`) — no static AWS keys.
+
+**GCS / Azure Blob:** The same principle applies. Use Workload Identity Federation (GCS) or federated credentials (Azure) instead of OIDC, and scope the IAM/RBAC policy to the app's state prefix. The workflow steps will differ — replace the `aws-actions/configure-aws-credentials` step with `google-github-actions/auth` (GCS) or `azure/login` (Azure).
 
 ## CODEOWNERS
 
 ```
-# Platform team owns admin resources and CI/CD config
-/.github/                          @org/platform-team
-/platform/                         @org/platform-team
-/README.md                         @org/platform-team
+# Default: platform team owns everything
+*                                  @org/platform-team
 
-# Each application team owns their folder
+# Application teams override their own folders (last match wins)
 /applications/payments/            @org/payments-team @org/platform-team
 /applications/inventory/           @org/inventory-team @org/platform-team
 ```
@@ -87,6 +104,10 @@ on:
   pull_request:
     paths: ['platform/**']
 
+permissions:
+  id-token: write
+  contents: read
+
 jobs:
   apply-platform:
     runs-on: ubuntu-latest
@@ -94,10 +115,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: aws-actions/configure-aws-credentials@v2
+      - uses: aws-actions/configure-aws-credentials@v4
         with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
           aws-region: us-east-1
 
       - name: Install Conduktor CLI
@@ -114,14 +134,14 @@ jobs:
             --enable-state \
             ${{ github.event_name == 'pull_request' && '--dry-run' || '' }}
         env:
-          CDK_API_KEY: ${{ secrets.CONDUKTOR_API_KEY }}
-          CDK_BASE_URL: ${{ vars.CONDUKTOR_BASE_URL }}
-          CDK_STATE_REMOTE_URI: ${{ vars.CONDUKTOR_STATE_URI }}
+          CDK_API_KEY: ${{ secrets.CDK_API_KEY }}
+          CDK_BASE_URL: ${{ vars.CDK_BASE_URL }}
+          CDK_STATE_REMOTE_URI: ${{ vars.CDK_STATE_REMOTE_URI }}
 ```
 
 ## Application workflow (`apply-apps.yml`)
 
-Detects the changed `applications/<app>/<env>/` folder from the git diff and applies with the correct scoped token. Fails if changes span multiple app/env combinations.
+Detects the changed `applications/<app>/<env>/` folder from the git diff and applies with the correct scoped token. Each app/env has its own IAM role and state file for isolation. Fails if changes span multiple app/env combinations or target an unknown environment.
 
 ```yaml
 name: Apply Application Resources
@@ -131,6 +151,10 @@ on:
     paths: ['applications/**']
   pull_request:
     paths: ['applications/**']
+
+permissions:
+  id-token: write
+  contents: read
 
 jobs:
   detect:
@@ -154,8 +178,13 @@ jobs:
           fi
 
           TARGETS=$(git diff --name-only "$BASE" "$HEAD" -- applications/ \
-            | awk -F'/' '{print $2 "/" $3}' \
+            | awk -F'/' 'NF>=3 {print $2 "/" $3}' \
             | sort -u)
+
+          if [ -z "$TARGETS" ]; then
+            echo "::error::No valid app/env changes detected under applications/"
+            exit 1
+          fi
 
           COUNT=$(echo "$TARGETS" | wc -l)
           if [ "$COUNT" -ne 1 ]; then
@@ -165,6 +194,13 @@ jobs:
 
           APP=$(echo "$TARGETS" | cut -d/ -f1)
           ENV=$(echo "$TARGETS" | cut -d/ -f2)
+
+          VALID_ENVS="dev stag prod"
+          if ! echo "$VALID_ENVS" | grep -qw "$ENV"; then
+            echo "::error::Unknown environment '$ENV'. Must be one of: $VALID_ENVS"
+            exit 1
+          fi
+
           echo "app=$APP" >> "$GITHUB_OUTPUT"
           echo "env=$ENV" >> "$GITHUB_OUTPUT"
           echo "Detected target: $APP/$ENV"
@@ -176,10 +212,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: aws-actions/configure-aws-credentials@v2
+      # OIDC federation — each GitHub Environment has its own AWS_ROLE_ARN,
+      # and the IAM role trust policy is pinned to that environment.
+      - uses: aws-actions/configure-aws-credentials@v4
         with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
           aws-region: us-east-1
 
       - name: Install Conduktor CLI
@@ -196,16 +233,16 @@ jobs:
             --enable-state \
             ${{ github.event_name == 'pull_request' && '--dry-run' || '' }}
         env:
-          CDK_API_KEY: ${{ secrets.CONDUKTOR_API_KEY }}
-          CDK_BASE_URL: ${{ vars.CONDUKTOR_BASE_URL }}
-          CDK_STATE_REMOTE_URI: ${{ vars.CONDUKTOR_STATE_URI }}
+          CDK_API_KEY: ${{ secrets.CDK_API_KEY }}
+          CDK_BASE_URL: ${{ vars.CDK_BASE_URL }}
+          CDK_STATE_REMOTE_URI: ${{ vars.CDK_STATE_REMOTE_URI }}
 ```
 
 ## How the workflows work
 
 **On pull request (plan):** `conduktor apply --dry-run` validates resources against the live instance. Policy violations surface here before merge.
 
-**On push to main (apply):** The workflow selects the corresponding GitHub Environment, providing the scoped `CONDUKTOR_API_KEY`. The CLI applies all YAML files, ordering resources by dependency. With `--enable-state`, resources removed from YAML are deleted from Conduktor.
+**On push to main (apply):** The workflow selects the corresponding GitHub Environment, providing the scoped `CDK_API_KEY`. The CLI applies all YAML files, ordering resources by dependency. With `--enable-state`, resources removed from YAML are deleted from Conduktor.
 
 ## Policy violations and exceptions
 
@@ -250,8 +287,8 @@ spec:
   rules:
     - condition: spec.replicationFactor >= 1
       errorMessage: "Replication factor has to be at least 1"
-    - condition: spec.partitions >= 1 && spec.partitions <= 12
-      errorMessage: "Partition count has to be between 1 and 12"
+    - condition: spec.partitions >= 1 && spec.partitions <= 3
+      errorMessage: "Partition count has to be between 1 and 3"
 ```
 
 ### Prod topic rules (`platform/policies/topic-rules-prod.yml`)
@@ -267,8 +304,8 @@ spec:
   rules:
     - condition: spec.replicationFactor == 3
       errorMessage: "Replication factor has to be exactly 3 in production"
-    - condition: spec.partitions >= 3
-      errorMessage: "Topics have to have at least 3 partitions in production"
+    - condition: spec.partitions >= 1 && spec.partitions <= 12
+      errorMessage: "Production topics need less than or equal to 12 partitions. If you need an exception, plead your case to the platform team."
     - condition: "\"retention.ms\" in spec.configs && int(string(spec.configs[\"retention.ms\"])) >= 3600000"
       errorMessage: "Retention has to be explicitly set and at least 1 hour in production"
     - condition: "\"min.insync.replicas\" in spec.configs && int(string(spec.configs[\"min.insync.replicas\"])) >= 2"
@@ -342,9 +379,14 @@ spec:
 
 1. Create `platform/applications/<app>/application.yml` (Application resource with `spec.owner` pointing to a Console Group)
 2. Create `platform/applications/<app>/<env>.yml` for each environment (ApplicationInstance with cluster, serviceAccount, policyRef, resources)
-3. Create GitHub Environments (`<app>-<env>`) with an ApplicationInstanceToken as `CONDUKTOR_API_KEY`
-4. Add CODEOWNERS entry: `/applications/<app>/  @org/<app>-team @org/platform-team`
-5. Grant the team repo write access
+3. Create an IAM role per app/env scoped to its state prefix (e.g. `s3://conduktor-state/<app>/<env>/`), with OIDC trust pinned to the GitHub Environment. For GCS use Workload Identity Federation; for Azure use federated credentials.
+4. Create GitHub Environments (`<app>-<env>`) with:
+   - `CDK_API_KEY` (secret) — ApplicationInstanceToken
+   - `CDK_BASE_URL` (variable) — Console URL
+   - `CDK_STATE_REMOTE_URI` (variable) — e.g. `s3://conduktor-state/<app>/<env>/`
+   - `AWS_ROLE_ARN` (variable) — the IAM role from step 3
+5. Add CODEOWNERS entry: `/applications/<app>/  @org/<app>-team @org/platform-team`
+6. Grant the team repo write access
 
 **Application team:**
 
@@ -371,4 +413,4 @@ No workflow changes needed — the detection logic handles new applications auto
 | Changes spanning multiple app/env folders in one PR | The `apply-apps.yml` workflow validates a single folder per PR. Split into separate PRs. |
 | Not creating GitHub Environments before merging the first PR | The workflow selects a GitHub Environment by name. Missing environments cause failures. |
 | Applying exceptions through the app workflow | Exceptions must go through `platform/exceptions/` and the platform workflow (AdminToken bypasses policies) |
-| Missing CODEOWNERS entry for a new app | Without it, anyone can approve changes to the application folder |
+| Missing CODEOWNERS entry for a new app | Without it, only the platform team can approve — the app team won't be listed as required reviewers for their own folder |
