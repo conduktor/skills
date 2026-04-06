@@ -30,7 +30,7 @@
    - `ApplicationInstance` for each app/cluster combination with resource prefixes derived from topic naming, service account from ACL analysis, and env labels from cluster mapping
    - `ApplicationInstancePermission` for each cross-team consumption pattern discovered
    - `ApplicationGroup` for each Console Group mapped to an Application, with permissions scoped to the correct ApplicationInstance
-   - `ResourcePolicy` stubs based on observed topic configurations (partition ranges, replication factors, naming patterns)
+   - `ResourcePolicy` files in `platform/policies/` — populate with the starter policies from [references/resource-policy-examples.md](../../references/resource-policy-examples.md) (topic-naming, topic-rules-dev, topic-rules-prod, subject-rules, connector-rules, appgroup-restrictions), tuning values based on observed topic configurations
    - `Topic`, `Subject`, and `Connector` resources placed in the correct `applications/<app>/<env>/` folder
    - Supporting files: `README.md`, `.github/CODEOWNERS`, `.github/workflows/apply-platform.yml`, `.github/workflows/apply-apps.yml`
 9. Present a summary of everything generated and offer to review any file
