@@ -25,7 +25,7 @@
    - Which environments exist (dev/stag/prod) and how do they map to clusters?
    - Which Console Groups map to which Applications?
 7. Ask the user for a target directory (default: `conduktor-self-service/`)
-8. Generate the complete self-service resource set (see [self-service-github-cicd.md](self-service-github-cicd.md) for repo structure, workflows, CODEOWNERS, and ResourcePolicy examples):
+8. Generate the complete self-service resource set (see [self-service-github-cicd-cli.md](self-service-github-cicd-cli.md) for repo structure, workflows, CODEOWNERS, and ResourcePolicy examples):
    - `Application` for each confirmed team/service boundary
    - `ApplicationInstance` for each app/cluster combination with resource prefixes derived from topic naming, service account from ACL analysis, and env labels from cluster mapping
    - `ApplicationInstancePermission` for each cross-team consumption pattern discovered
