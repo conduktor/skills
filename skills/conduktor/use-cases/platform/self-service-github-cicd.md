@@ -62,7 +62,7 @@ For production environments, add deployment protection rules such as required re
 
 ### State isolation
 
-Each app/env gets its own state file and cloud IAM role. This prevents one application's workflow from reading or writing another application's state, even if environment variables are exfiltrated.
+Each app/env gets its own state file and cloud IAM role. This prevents one application's workflow from reading or writing another application's state.
 
 **AWS (S3):** Create an IAM role per app/env with a trust policy pinned to the GitHub Environment via OIDC, and an S3 policy scoped to that app's state prefix:
 
