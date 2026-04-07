@@ -145,7 +145,25 @@ metadata:
 spec: ...
 ```
 
-## 10. Using TopicPolicy instead of ResourcePolicy
+## 10. Wrong apiVersion for self-service resources
+
+**Wrong:**
+```yaml
+apiVersion: v1
+kind: ApplicationGroup
+```
+```yaml
+apiVersion: self-service/v1
+kind: Application
+```
+**Why:** Self-service resources require exactly `self-serve/v1`. Using `v1` or `self-service/v1` may be silently accepted by some API versions but is incorrect and can cause failures. This applies to: `Application`, `ApplicationInstance`, `ApplicationInstancePermission`, `ApplicationGroup`, and `ResourcePolicy`.
+**Correct:**
+```yaml
+apiVersion: self-serve/v1
+kind: ApplicationGroup
+```
+
+## 11. Using TopicPolicy instead of ResourcePolicy
 
 **Wrong:**
 ```bash

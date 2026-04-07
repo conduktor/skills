@@ -15,7 +15,7 @@
    - Then for each connect cluster: `conduktor get Connector --cluster <cluster-id> --connectCluster <connect-cluster-id> -o yaml` — connectors (requires both `--cluster` and `--connectCluster`)
 5. Analyze the exported resources and present findings to the user:
    - **Clusters**: list each cluster ID and its topic count
-   - **Topic ownership candidates**: group topics by naming prefix (e.g., `payments.*`, `inventory.*`) and propose each prefix group as a candidate Application
+   - **Topic ownership candidates**: tokenize topic names by all common delimiters (`.`, `-`, `_`), build a prefix tree, and find the depth that produces coherent groupings — propose each group as a candidate Application
    - **Service account mapping**: for each service account, list which topic prefixes its ACLs cover — these map to ApplicationInstance `serviceAccount` fields
    - **Group permissions**: for each Console Group, list which clusters and topic patterns it has access to — these inform ApplicationGroup definitions
    - **Cross-team consumption**: identify service accounts or groups that have READ access to topics outside their primary prefix — these become ApplicationInstancePermission candidates
@@ -30,7 +30,7 @@
    - `ApplicationInstance` for each app/cluster combination with resource prefixes derived from topic naming, service account from ACL analysis, and env labels from cluster mapping
    - `ApplicationInstancePermission` for each cross-team consumption pattern discovered
    - `ApplicationGroup` for each Console Group mapped to an Application, with permissions scoped to the correct ApplicationInstance
-   - `ResourcePolicy` files in `platform/policies/` — populate with the starter policies from [references/resource-policy-examples.md](../../references/resource-policy-examples.md) (topic-naming, topic-rules-dev, topic-rules-prod, subject-rules, connector-rules, appgroup-restrictions), tuning values based on observed topic configurations
+   - `ResourcePolicy` files in `platform/policies/` — start from the starter policies in [references/resource-policy-examples.md](../../references/resource-policy-examples.md) (topic-naming, topic-rules-dev, topic-rules-prod, subject-rules, connector-rules, appgroup-restrictions). Before generating, present the observed configuration ranges to the user (e.g., "partition counts range from 3–6, replication factor is 3 everywhere, retention ranges from 7d–28d") and ask them to confirm or adjust the policy bounds. Do not silently tune values.
    - `Topic`, `Subject`, and `Connector` resources placed in the correct `applications/<app>/<env>/` folder
    - Supporting files: `README.md`, `.github/CODEOWNERS`, `.github/workflows/apply-platform.yml`, `.github/workflows/apply-apps.yml`
 9. Present a summary of everything generated and offer to review any file
@@ -67,19 +67,48 @@ The CLI has two scopes: **global** resources (fetched via `conduktor get all -c`
 
 ### 2. Inferring ownership from topic prefixes
 
-Group topics by their first segment to find natural ownership boundaries:
+Topic names use varied conventions — dots, hyphens, underscores, or combinations — and the ownership-relevant segment is not always the first one. Do not assume a single delimiter or a fixed prefix depth.
+
+**Approach:**
+
+1. Collect all topic names on the cluster.
+2. Tokenize each name by splitting on all common delimiters (`.`, `-`, `_`).
+3. Build a prefix tree from the tokens and find the depth that produces the most coherent groupings — the level where distinct groups emerge without collapsing everything into one bucket or fragmenting into single topics.
+4. Present the candidate groupings to the user for confirmation.
+
+**Simple naming** — ownership at first segment:
 
 ```
 payments.transactions       ─┐
 payments.settlements        ─┤── candidate Application: "payments"
 payments.refunds            ─┘
-
-inventory.stock-levels      ─┐
-inventory.reservations      ─┤── candidate Application: "inventory"
-inventory.warehouse-events  ─┘
 ```
 
-Not all topics fit cleanly. Shared topics, legacy names, or flat naming schemes need the user to manually assign ownership.
+**Multi-segment naming** — ownership may be buried deeper:
+
+```
+prod.us.payments.tx-created     ─┐
+prod.us.payments.tx-settled     ─┤── candidate Application: "payments"
+prod.us.payments.refund-issued  ─┘
+
+prod.us.inventory.stock-levels  ─┐
+prod.us.inventory.reservations  ─┤── candidate Application: "inventory"
+prod.us.inventory.warehouse     ─┘
+```
+
+Here `prod` and `us` are shared by all topics — the meaningful split is at depth 3. The prefix tree makes this visible: depth 1 gives one group, depth 2 gives one group, depth 3 gives two distinct groups.
+
+**Mixed delimiters** — tokenize before grouping:
+
+```
+stage.abc.xyz.payments-summary.def_ghi   ─┐
+stage.abc.xyz.payments-invoices.foo_bar   ─┤── candidate Application: "payments"
+stage.abc.xyz.orders-created.baz_qux      ── candidate Application: "orders"
+```
+
+Splitting on `.`, `-`, and `_` gives tokens `[stage, abc, xyz, payments, summary, def, ghi]`. The grouping emerges at the 4th token.
+
+**When grouping fails:** topics with flat names, no shared prefixes, or inconsistent conventions won't cluster. Flag these as unassigned and ask the user to assign them manually.
 
 ### 3. Correlating service accounts to applications
 
@@ -144,6 +173,7 @@ The agent offers to `--dry-run` each step before applying.
 | Running discovery with an ApplicationInstanceToken instead of AdminToken | Bootstrap requires full visibility. Use an AdminToken for all discovery commands. |
 | Using `conduktor get all -c` and expecting Topics/ServiceAccounts | `get all` only returns global resources. Topics, ServiceAccounts, Subjects, and Connectors are cluster-scoped — fetch them per cluster with `--cluster <id>`. |
 | Assigning a topic to the wrong Application based on prefix alone | Validate with service account ACLs — the SA with WRITE access is the true owner. |
+| Splitting topic names on the first `.` only | Real topic names use mixed delimiters and multi-segment prefixes (e.g., `prod.us.payments.tx-created`). Tokenize by all delimiters and find the grouping depth from the prefix tree. |
 | Missing cross-team READ patterns | Check all SA ACLs for READ on prefixes they don't own. Each one needs an ApplicationInstancePermission. |
 | Creating ApplicationInstances with overlapping resource prefixes on the same cluster | Resource prefixes must not overlap between ApplicationInstances on the same cluster. Resolve conflicts before applying. |
 | Forgetting to set `serviceAccount` on ApplicationInstance | Each instance needs a unique SA per cluster. Conduktor creates Kafka ACLs for this SA automatically. |

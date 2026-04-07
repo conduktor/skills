@@ -19,6 +19,9 @@ spec:
       errorMessage: "Topic name must follow the pattern <app>.<descriptive-name>"
     - condition: has(metadata.labels.confidentiality) && metadata.labels["confidentiality"] in ["public", "internal", "restricted"]
       errorMessage: "Topics must have a 'confidentiality' label set to one of: public, internal, restricted"
+    # NOTE: has() only works with dot-accessible keys. For hyphenated keys, use "key" in map:
+    - condition: '"data-classification" in metadata.labels && metadata.labels["data-classification"] in ["C0", "C1", "C2"]'
+      errorMessage: "Topics must have a 'data-classification' label set to one of: C0, C1, C2"
 ```
 
 ## Dev topic rules (`topic-rules-dev.yml`)
