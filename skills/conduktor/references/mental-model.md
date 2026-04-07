@@ -247,11 +247,39 @@ spec:
       errorMessage: "data-criticality should be one of C0, C1, C2"
 ```
 
-CEL tips: use `int(string(...))` for config values, bracket notation for dotted/dashed keys, `has(field)` for optional checks.
+CEL tips: use `int(string(...))` for config values, bracket notation for dotted/dashed keys. For optional field checks: `has(obj.field)` works only with dot-accessible keys (no hyphens/dots in the key name). For hyphenated keys like `data-classification`, use `"data-classification" in metadata.labels` instead — `has()` does not support bracket notation.
 
 ### TopicPolicy (deprecated — do not use)
 
 Legacy constraint-based policy for topics only. Replaced by ResourcePolicy. Do not run `conduktor get TopicPolicy` or generate TopicPolicy YAML — always use ResourcePolicy instead. Both `topicPolicyRef` and `policyRef` can coexist on ApplicationInstance during migration, but new configs should only use `policyRef`.
+
+### ApplicationGroup
+
+Console RBAC scoped to an Application. Grants permissions on resources within specific ApplicationInstances. `spec.members` is **required by the API** — set to `[]` when using `externalGroups` for IdP-managed membership.
+
+```yaml
+apiVersion: self-serve/v1
+kind: ApplicationGroup
+metadata:
+  application: "clickstream-app"
+  name: "clickstream-support"
+spec:
+  displayName: "Clickstream Support"
+  description: "Read access to clickstream resources"
+  members: []                          # required even if empty
+  externalGroups:
+    - clickstream-developers           # Console Group technical-id
+  permissions:
+    - appInstance: "clickstream-dev"
+      resourceType: TOPIC
+      patternType: LITERAL
+      name: "*"
+      permissions: ["topicViewConfig", "topicConsume"]
+```
+
+- `spec.members`: list of user emails for direct membership. Required field — use `[]` if relying solely on `externalGroups`.
+- `spec.externalGroups`: list of Console Group technical-ids. Members of these groups inherit the ApplicationGroup's permissions.
+- `spec.permissions`: list of permission entries, each scoped to an `appInstance` and `resourceType`.
 
 ### ApplicationInstancePermission
 
