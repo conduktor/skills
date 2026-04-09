@@ -13,15 +13,35 @@ metadata:
   name: topic-naming
 spec:
   targetKind: Topic
-  description: "Enforces topic naming convention and required labels"
+  description: "Enforces topic naming convention"
   rules:
     - condition: metadata.name.matches("^[a-z0-9-]+\\.[a-z0-9.-]+$")
       errorMessage: "Topic name must follow the pattern <app>.<descriptive-name>"
+```
+
+## Topic label conventions (`topic-labels.yml`)
+
+Enforces the standard label set on every topic. Adapt the allowed values to match your organization. Uses `"key" in metadata.labels` (not `has()`) because hyphenated keys require bracket notation in CEL.
+
+```yaml
+apiVersion: self-serve/v1
+kind: ResourcePolicy
+metadata:
+  name: topic-labels
+spec:
+  targetKind: Topic
+  description: "Enforces required labels on topics"
+  rules:
+    - condition: has(metadata.labels.env) && metadata.labels["env"] in ["dev", "stag", "prod"]
+      errorMessage: "Topics must have an 'env' label set to one of: dev, stag, prod"
+    - condition: >
+        "business-unit" in metadata.labels
+        && metadata.labels["business-unit"].size() > 0
+      errorMessage: "Topics must have a 'business-unit' label (e.g., finance, logistics, risk)"
     - condition: has(metadata.labels.confidentiality) && metadata.labels["confidentiality"] in ["public", "internal", "restricted"]
       errorMessage: "Topics must have a 'confidentiality' label set to one of: public, internal, restricted"
-    # NOTE: has() only works with dot-accessible keys. For hyphenated keys, use "key" in map:
-    - condition: '"data-classification" in metadata.labels && metadata.labels["data-classification"] in ["C0", "C1", "C2"]'
-      errorMessage: "Topics must have a 'data-classification' label set to one of: C0, C1, C2"
+    - condition: has(metadata.labels.team) && metadata.labels["team"].size() > 0
+      errorMessage: "Topics must have a 'team' label identifying the owning team"
 ```
 
 ## Dev topic rules (`topic-rules-dev.yml`)

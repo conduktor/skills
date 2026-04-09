@@ -28,9 +28,9 @@
 8. Generate the complete self-service resource set (see [self-service-github-cicd-cli.md](self-service-github-cicd-cli.md) for repo structure, workflows, CODEOWNERS, and ResourcePolicy examples):
    - `Application` for each confirmed team/service boundary
    - `ApplicationInstance` for each app/cluster combination with resource prefixes derived from topic naming, service account from ACL analysis, and env labels from cluster mapping
-   - `ApplicationInstancePermission` for each cross-team consumption pattern discovered
+   - `ApplicationInstancePermission` for each cross-team READ pattern discovered — place each `instance-permissions.yml` in the **owning** application's `applications/<owning-app>/<env>/` folder (see [section 4](#4-generating-applicationinstancepermission-from-cross-team-read-patterns))
    - `ApplicationGroup` for each Console Group mapped to an Application, with permissions scoped to the correct ApplicationInstance
-   - `ResourcePolicy` files in `platform/policies/` — start from the starter policies in [references/resource-policy-examples.md](../../references/resource-policy-examples.md) (topic-naming, topic-rules-dev, topic-rules-prod, subject-rules, connector-rules, appgroup-restrictions). Before generating, present the observed configuration ranges to the user (e.g., "partition counts range from 3–6, replication factor is 3 everywhere, retention ranges from 7d–28d") and ask them to confirm or adjust the policy bounds. Do not silently tune values.
+   - `ResourcePolicy` files in `platform/policies/` — start from the starter policies in [references/resource-policy-examples.md](../../references/resource-policy-examples.md) (topic-naming, topic-labels, topic-rules-dev, topic-rules-prod, subject-rules, connector-rules, appgroup-restrictions). Before generating, present the observed configuration ranges to the user (e.g., "partition counts range from 3–6, replication factor is 3 everywhere, retention ranges from 7d–28d") and ask them to confirm or adjust the policy bounds. Do not silently tune values.
    - `Topic`, `Subject`, and `Connector` resources placed in the correct `applications/<app>/<env>/` folder
    - Supporting files: `README.md`, `.github/CODEOWNERS`, `.github/workflows/apply-platform.yml`, `.github/workflows/apply-apps.yml`
 9. Present a summary of everything generated and offer to review any file
@@ -126,7 +126,49 @@ SA "sa-notifications-prod" has ACLs:
 
 When a service account has READ-only ACLs on a prefix owned by another team, that signals a cross-team consumption pattern that should become an `ApplicationInstancePermission`.
 
-### 4. Mapping Console Groups to ApplicationGroups
+### 4. Generating ApplicationInstancePermission from cross-team READ patterns
+
+Each service account with READ ACLs on a prefix owned by another Application is a cross-team consumer. The **owning** ApplicationInstance creates an `ApplicationInstancePermission` granting read access to the **consuming** ApplicationInstance.
+
+**Mapping ACLs to permissions:**
+
+```
+SA "sa-notifications-prod" has ACLs:
+  WRITE on Topic PREFIXED "notifications."  → owner of notifications (skip — self)
+  READ  on Topic PREFIXED "payments."       → payments team owns this prefix
+  READ  on Topic LITERAL  "orders.completed" → orders team owns this topic
+
+Maps to:
+  1. payments-prod grants READ to notifications-prod on PREFIXED "payments."
+  2. orders-prod grants READ to notifications-prod on LITERAL "orders.completed"
+```
+
+**Generated `instance-permissions.yml`** (placed in `applications/<owning-app>/<env>/`):
+
+```yaml
+---
+apiVersion: self-serve/v1
+kind: ApplicationInstancePermission
+metadata:
+  application: "payments"
+  appInstance: "payments-prod"
+  name: "payments-prod-to-notifications-prod"
+spec:
+  resource:
+    type: TOPIC
+    name: "payments."
+    patternType: PREFIXED
+  serviceAccountPermission: READ
+  userPermission: READ
+  grantedTo: "notifications-prod"
+```
+
+**Key rules:**
+- **Placement:** `instance-permissions.yml` goes in the **owning** application's folder, not the consumer's. The owner controls who can access their resources.
+- **Naming:** `<owning-instance>-to-<granted-instance>`. Add a suffix when one instance grants multiple permissions to the same target (e.g., `-topics`, `-events`).
+- **Validation:** `spec.resource.name` must fall under the owning ApplicationInstance's declared resource pattern. Both instances must be on the same cluster. `spec` is immutable — delete and recreate to change.
+
+### 5. Mapping Console Groups to ApplicationGroups
 
 Console Groups define UI permissions. Each group's cluster-scoped permissions indicate which Application it belongs to:
 
@@ -141,7 +183,7 @@ Group "payments-developers":
 
 If a group has permissions spanning multiple prefix groups, it may be an admin/platform group rather than an application group. Flag these for the user to decide.
 
-### 5. Mapping clusters to environments
+### 6. Mapping clusters to environments
 
 Ask the user how clusters map to environments. Common patterns:
 
@@ -153,7 +195,7 @@ Ask the user how clusters map to environments. Common patterns:
 
 This mapping determines the `metadata.labels.env` on each ApplicationInstance and the folder structure under `applications/<app>/<env>/`.
 
-### 6. Rollout strategy
+### 7. Rollout strategy
 
 Self-service resources should be applied in dependency order:
 
@@ -179,3 +221,5 @@ The agent offers to `--dry-run` each step before applying.
 | Forgetting to set `serviceAccount` on ApplicationInstance | Each instance needs a unique SA per cluster. Conduktor creates Kafka ACLs for this SA automatically. |
 | Applying ApplicationGroups before the Application and ApplicationInstance exist | Resources must be applied in dependency order: Application → ApplicationInstance → ApplicationGroup. |
 | Treating Console Group permissions as the only ownership signal | Console Groups control UI access only. Service account ACLs are the authoritative Kafka-level ownership signal. |
+| Placing `instance-permissions.yml` in the consuming app's folder | The **owning** ApplicationInstance creates the permission. Place it in `applications/<owning-app>/<env>/`. |
+| Ignoring READ ACLs on foreign prefixes | READ ACLs on prefixes owned by another Application are cross-team consumption patterns — generate an `ApplicationInstancePermission` for each one. |

@@ -43,6 +43,7 @@ conduktor-self-service/
 
 **Do not use AdminTokens for application workflows.** ApplicationInstanceTokens enforce that a team can only modify resources within their own application instance boundaries.
 
+
 ## GitHub Environments
 
 Create a GitHub Environment for each scope. Each stores its own secrets and variables that the workflow maps to CLI env vars.
@@ -291,6 +292,69 @@ No workflow changes needed — the detection logic handles new applications auto
 | `confidentiality` | Data classification | `public`, `internal`, `restricted` |
 | `team` | Owning team | `payments-team` |
 
+## Generated README
+
+When generating the repository, include a `README.md` at the root that explains the federated ownership model and how teams interact with the repo. Cover these sections:
+
+### Key Concepts
+
+Before diving in, understand the Conduktor self-service resource hierarchy:
+
+1. **[Application](https://docs.conduktor.io/guide/reference/self-service-reference#application)** — a logical grouping representing a team or service (admin resource)
+2. **[ApplicationInstance](https://docs.conduktor.io/guide/reference/self-service-reference#applicationinstance)** — links an Application to a specific Kafka cluster/environment, defines ownership, and creates service account and user permissions (admin resource)
+3. **[ResourcePolicy](https://docs.conduktor.io/guide/reference/self-service-reference#resourcepolicy)** — CEL-based validation rules enforced at apply time (admin resource)
+4. **[ApplicationInstancePermission](https://docs.conduktor.io/guide/reference/self-service-reference#applicationinstancepermission)** — grants another application instance access to your topics, enabling cross-team collaboration (app-managed resource)
+5. **[ApplicationGroup](https://docs.conduktor.io/guide/reference/self-service-reference#applicationgroup)** — defines Console UI permissions for team members within an application (app-managed resource)
+6. **[Topic](https://docs.conduktor.io/guide/reference/kafka-reference#topic), [Subject](https://docs.conduktor.io/guide/reference/kafka-reference#subject), [Connector](https://docs.conduktor.io/guide/reference/kafka-reference#connector)** — the actual Kafka resources teams manage day-to-day (app-managed resources)
+
+Admin resources (`Application`, `ApplicationInstance`, `ResourcePolicy`) are managed exclusively by the platform team. Application teams manage their own Kafka resources within the boundaries the platform team has defined.
+
+All resources follow a Kubernetes-style declarative format:
+
+```yaml
+apiVersion: self-serve/v1  # or kafka/v2 for Kafka resources
+kind: <ResourceKind>
+metadata:
+  name: resource-name
+  labels:
+    key: value
+spec:
+  # Resource-specific fields
+```
+
+### Repo overview and structure
+
+Explain the split: `platform/` is admin-level resources (Application, ApplicationInstance, ResourcePolicy) managed exclusively by the platform team with an AdminToken. `applications/<app>/<env>/` contains day-to-day Kafka resources (topics, subjects, connectors, application groups, instance permissions) owned by each application team using a scoped ApplicationInstanceToken. Include the directory tree from the [Repository structure](#repository-structure) section and a table mapping each directory to its owner, token type, and purpose.
+
+### How CI/CD works
+
+- **Pull requests** run `conduktor apply --dry-run` against the live Console instance. Policy violations surface before merge.
+- **Merges to main** apply resources automatically. The platform workflow (`apply-platform.yml`) uses an AdminToken; the application workflow (`apply-apps.yml`) detects the changed `<app>/<env>` folder and selects the matching GitHub Environment for a scoped ApplicationInstanceToken.
+- **Policy exceptions** go in `platform/exceptions/<app>/<env>/`. The platform workflow applies them with an AdminToken, bypassing policy validation. Application teams open the PR; only the platform team can approve (CODEOWNERS).
+
+### Onboard a new application
+
+Two checklists — platform team and application team:
+
+**Platform team:**
+1. Create `platform/applications/<app>/application.yml` (`spec.owner` → Console Group)
+2. Create `platform/applications/<app>/<env>.yml` per environment (ApplicationInstance with cluster, serviceAccount, policyRef, resources)
+3. Create an IAM role per app/env scoped to the state prefix (e.g., `s3://conduktor-state/<app>/<env>/`)
+4. Create GitHub Environments (`<app>-<env>`) with `CDK_API_KEY`, `CDK_BASE_URL`, `CDK_STATE_REMOTE_URI`, `AWS_ROLE_ARN`
+5. Add CODEOWNERS entry: `/applications/<app>/  @org/<app>-team @org/platform-team`
+
+**Application team:**
+1. Create `applications/<app>/<env>/topics.yml` with topics matching the ApplicationInstance resource prefix
+2. Add `application-groups.yml` for Console UI permissions
+3. Add `instance-permissions.yml` if cross-team topic access is needed (see [request-access](../app-developer/request-access.md))
+4. Open a PR — dry-run validates against policies. After review and merge, resources apply automatically.
+
+Admin and application API keys can be managed in the UI or via `conduktor token` subcommand.
+
+### Labels convention
+
+Include the labels table from the [Labels convention](#labels-convention) section so teams know which labels to set on their resources.
+
 ## Common mistakes
 
 | Mistake | Fix |
@@ -300,3 +364,4 @@ No workflow changes needed — the detection logic handles new applications auto
 | Not creating GitHub Environments before merging the first PR | The workflow selects a GitHub Environment by name. Missing environments cause failures. |
 | Applying exceptions through the app workflow | Exceptions must go through `platform/exceptions/` and the platform workflow (AdminToken bypasses policies) |
 | Missing CODEOWNERS entry for a new app | Without it, only the platform team can approve — the app team won't be listed as required reviewers for their own folder |
+| README missing onboarding steps | Teams won't know how to get started. Always include both platform and application team checklists. |
