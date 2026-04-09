@@ -295,6 +295,32 @@ No workflow changes needed — the detection logic handles new applications auto
 
 When generating the repository, include a `README.md` at the root that explains the federated ownership model and how teams interact with the repo. Cover these sections:
 
+### Key Concepts
+
+Before diving in, understand the Conduktor self-service resource hierarchy:
+
+1. **[Application](https://docs.conduktor.io/guide/reference/self-service-reference#application)** — a logical grouping representing a team or service (admin resource)
+2. **[ApplicationInstance](https://docs.conduktor.io/guide/reference/self-service-reference#applicationinstance)** — links an Application to a specific Kafka cluster/environment (admin resource)
+3. **[ResourcePolicy](https://docs.conduktor.io/guide/reference/self-service-reference#resourcepolicy)** — CEL-based validation rules enforced at apply time (admin resource)
+4. **[ApplicationInstancePermission](https://docs.conduktor.io/guide/reference/self-service-reference#applicationinstancepermission)** — grants another application instance access to your topics, enabling cross-team collaboration (app-managed resource)
+5. **[ApplicationGroup](https://docs.conduktor.io/guide/reference/self-service-reference#applicationgroup)** — defines Console UI permissions for team members within an application (app-managed resource)
+6. **[Topic](https://docs.conduktor.io/guide/reference/kafka-reference#topic), [Subject](https://docs.conduktor.io/guide/reference/kafka-reference#subject), [Connector](https://docs.conduktor.io/guide/reference/kafka-reference#connector)** — the actual Kafka resources teams manage day-to-day (app-managed resources)
+
+Admin resources (`Application`, `ApplicationInstance`, `ResourcePolicy`) are managed exclusively by the platform team. Application teams manage their own Kafka resources within the boundaries the platform team has defined.
+
+All resources follow a Kubernetes-style declarative format:
+
+```yaml
+apiVersion: self-serve/v1  # or kafka/v2 for Kafka resources
+kind: <ResourceKind>
+metadata:
+  name: resource-name
+  labels:
+    key: value
+spec:
+  # Resource-specific fields
+```
+
 ### Repo overview and structure
 
 Explain the split: `platform/` is admin-level resources (Application, ApplicationInstance, ResourcePolicy) managed exclusively by the platform team with an AdminToken. `applications/<app>/<env>/` contains day-to-day Kafka resources (topics, subjects, connectors, application groups, instance permissions) owned by each application team using a scoped ApplicationInstanceToken. Include the directory tree from the [Repository structure](#repository-structure) section and a table mapping each directory to its owner, token type, and purpose.
