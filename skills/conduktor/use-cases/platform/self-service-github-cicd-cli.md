@@ -43,6 +43,7 @@ conduktor-self-service/
 
 **Do not use AdminTokens for application workflows.** ApplicationInstanceTokens enforce that a team can only modify resources within their own application instance boundaries.
 
+
 ## GitHub Environments
 
 Create a GitHub Environment for each scope. Each stores its own secrets and variables that the workflow maps to CLI env vars.
@@ -347,6 +348,8 @@ Two checklists — platform team and application team:
 2. Add `application-groups.yml` for Console UI permissions
 3. Add `instance-permissions.yml` if cross-team topic access is needed (see [request-access](../app-developer/request-access.md))
 4. Open a PR — dry-run validates against policies. After review and merge, resources apply automatically.
+
+Admin and application API keys can be managed in the UI or via `conduktor token` subcommand.
 
 ### Labels convention
 
