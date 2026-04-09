@@ -291,6 +291,41 @@ No workflow changes needed — the detection logic handles new applications auto
 | `confidentiality` | Data classification | `public`, `internal`, `restricted` |
 | `team` | Owning team | `payments-team` |
 
+## Generated README
+
+When generating the repository, include a `README.md` at the root that explains the federated ownership model and how teams interact with the repo. Cover these sections:
+
+### Repo overview and structure
+
+Explain the split: `platform/` is admin-level resources (Application, ApplicationInstance, ResourcePolicy) managed exclusively by the platform team with an AdminToken. `applications/<app>/<env>/` contains day-to-day Kafka resources (topics, subjects, connectors, application groups, instance permissions) owned by each application team using a scoped ApplicationInstanceToken. Include the directory tree from the [Repository structure](#repository-structure) section and a table mapping each directory to its owner, token type, and purpose.
+
+### How CI/CD works
+
+- **Pull requests** run `conduktor apply --dry-run` against the live Console instance. Policy violations surface before merge.
+- **Merges to main** apply resources automatically. The platform workflow (`apply-platform.yml`) uses an AdminToken; the application workflow (`apply-apps.yml`) detects the changed `<app>/<env>` folder and selects the matching GitHub Environment for a scoped ApplicationInstanceToken.
+- **Policy exceptions** go in `platform/exceptions/<app>/<env>/`. The platform workflow applies them with an AdminToken, bypassing policy validation. Application teams open the PR; only the platform team can approve (CODEOWNERS).
+
+### Onboard a new application
+
+Two checklists — platform team and application team:
+
+**Platform team:**
+1. Create `platform/applications/<app>/application.yml` (`spec.owner` → Console Group)
+2. Create `platform/applications/<app>/<env>.yml` per environment (ApplicationInstance with cluster, serviceAccount, policyRef, resources)
+3. Create an IAM role per app/env scoped to the state prefix (e.g., `s3://conduktor-state/<app>/<env>/`)
+4. Create GitHub Environments (`<app>-<env>`) with `CDK_API_KEY`, `CDK_BASE_URL`, `CDK_STATE_REMOTE_URI`, `AWS_ROLE_ARN`
+5. Add CODEOWNERS entry: `/applications/<app>/  @org/<app>-team @org/platform-team`
+
+**Application team:**
+1. Create `applications/<app>/<env>/topics.yml` with topics matching the ApplicationInstance resource prefix
+2. Add `application-groups.yml` for Console UI permissions
+3. Add `instance-permissions.yml` if cross-team topic access is needed (see [request-access](../app-developer/request-access.md))
+4. Open a PR — dry-run validates against policies. After review and merge, resources apply automatically.
+
+### Labels convention
+
+Include the labels table from the [Labels convention](#labels-convention) section so teams know which labels to set on their resources.
+
 ## Common mistakes
 
 | Mistake | Fix |
@@ -300,3 +335,4 @@ No workflow changes needed — the detection logic handles new applications auto
 | Not creating GitHub Environments before merging the first PR | The workflow selects a GitHub Environment by name. Missing environments cause failures. |
 | Applying exceptions through the app workflow | Exceptions must go through `platform/exceptions/` and the platform workflow (AdminToken bypasses policies) |
 | Missing CODEOWNERS entry for a new app | Without it, only the platform team can approve — the app team won't be listed as required reviewers for their own folder |
+| README missing onboarding steps | Teams won't know how to get started. Always include both platform and application team checklists. |
