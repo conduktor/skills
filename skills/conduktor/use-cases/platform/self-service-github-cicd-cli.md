@@ -300,7 +300,7 @@ When generating the repository, include a `README.md` at the root that explains 
 Before diving in, understand the Conduktor self-service resource hierarchy:
 
 1. **[Application](https://docs.conduktor.io/guide/reference/self-service-reference#application)** — a logical grouping representing a team or service (admin resource)
-2. **[ApplicationInstance](https://docs.conduktor.io/guide/reference/self-service-reference#applicationinstance)** — links an Application to a specific Kafka cluster/environment (admin resource)
+2. **[ApplicationInstance](https://docs.conduktor.io/guide/reference/self-service-reference#applicationinstance)** — links an Application to a specific Kafka cluster/environment, defines ownership, and creates service account and user permissions (admin resource)
 3. **[ResourcePolicy](https://docs.conduktor.io/guide/reference/self-service-reference#resourcepolicy)** — CEL-based validation rules enforced at apply time (admin resource)
 4. **[ApplicationInstancePermission](https://docs.conduktor.io/guide/reference/self-service-reference#applicationinstancepermission)** — grants another application instance access to your topics, enabling cross-team collaboration (app-managed resource)
 5. **[ApplicationGroup](https://docs.conduktor.io/guide/reference/self-service-reference#applicationgroup)** — defines Console UI permissions for team members within an application (app-managed resource)
