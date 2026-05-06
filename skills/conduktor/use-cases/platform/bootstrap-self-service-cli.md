@@ -1,12 +1,17 @@
 # Bootstrap self-service from existing Console resources
 
+The output of this workflow is a repo that mirrors the official [conduktor/self-service-template](https://github.com/conduktor/self-service-template). Use the template as the scaffolding base — clone or fork it, then fill in the discovered Applications, ApplicationInstances, Groups, KafkaClusters, and ResourcePolicies. Do not regenerate the workflow YAML, CODEOWNERS structure, or starter policies from scratch; those live in the template and are kept current there.
+
+For the exact bootstrap commands (with a `gh`-available path and a `git clone` fallback that requires user approval), see [self-service-github-cicd-cli.md → Agent: how to bootstrap a copy](self-service-github-cicd-cli.md#agent-how-to-bootstrap-a-copy). This file focuses on how to populate the resulting repo from existing Console state.
+
 ## Agent workflow
 
 1. Run `conduktor token list admin` to verify CLI auth with an AdminToken
 2. If not authenticated, help configure `CDK_BASE_URL` + `CDK_API_KEY`
 3. Export global Console resources and discover clusters:
-   - `conduktor get all -c -o yaml` — global resources: KafkaClusters, Groups, and any existing self-service resources (does NOT include cluster-scoped resources like Topics, ServiceAccounts, Subjects, or Connectors)
+   - `conduktor get all -c -o yaml` — global resources: KafkaClusters, KafkaConnectClusters, Groups, and any existing self-service resources (does NOT include cluster-scoped resources like Topics, ServiceAccounts, Subjects, or Connectors)
    - Parse the output for `kind: KafkaCluster` entries to get all cluster IDs
+   - Capture `KafkaCluster`, `KafkaConnectCluster`, and `Group` resources for `platform/clusters/<instance>/` and `platform/groups/` files (redact credentials — replace bootstrap server passwords and Schema Registry credentials with `${VAR}` placeholders to be supplied via the `kafka-<instance>` GitHub Environment secrets)
 4. Export cluster-scoped resources — for each cluster discovered in step 3, run in parallel:
    - `conduktor get Topic --cluster <cluster-id> -o yaml` — all topics on this cluster
    - `conduktor get ServiceAccount --cluster <cluster-id> -o yaml` — service accounts and their Kafka ACLs on this cluster
@@ -22,17 +27,19 @@
 6. Ask the user to confirm or adjust the proposed application boundaries:
    - Which prefix groups should be merged or split?
    - What should each Application be named?
-   - Which environments exist (dev/stag/prod) and how do they map to clusters?
+   - Which **instances** exist and on what axis (env, region, data classification, tenant, etc.) — and how do they map to KafkaClusters? See [self-service-github-cicd-cli.md](self-service-github-cicd-cli.md#about-the-instance-slot) for the dimensions an instance can represent. Default to `dev`/`stag`/`prod` only if the user confirms environment is the right axis.
    - Which Console Groups map to which Applications?
-7. Ask the user for a target directory (default: `conduktor-self-service/`)
-8. Generate the complete self-service resource set (see [self-service-github-cicd-cli.md](self-service-github-cicd-cli.md) for repo structure, workflows, CODEOWNERS, and ResourcePolicy examples):
-   - `Application` for each confirmed team/service boundary
-   - `ApplicationInstance` for each app/cluster combination with resource prefixes derived from topic naming, service account from ACL analysis, and env labels from cluster mapping
-   - `ApplicationInstancePermission` for each cross-team READ pattern discovered — place each `instance-permissions.yml` in the **owning** application's `applications/<owning-app>/<env>/` folder (see [section 4](#4-generating-applicationinstancepermission-from-cross-team-read-patterns))
-   - `ApplicationGroup` for each Console Group mapped to an Application, with permissions scoped to the correct ApplicationInstance
+7. Ask the user for a target directory. Recommend bootstrapping from the official template first using the [agent bootstrap procedure](self-service-github-cicd-cli.md#agent-how-to-bootstrap-a-copy) (checks for `gh`, falls back to shallow `git clone` with user approval). Otherwise default to `conduktor-self-service/`.
+8. Generate the complete self-service resource set into the directory layout from [self-service-github-cicd-cli.md](self-service-github-cicd-cli.md#repository-structure):
+   - `KafkaCluster` and `KafkaConnectCluster` files in `platform/clusters/<instance>/` — with credentials replaced by `${VAR}` placeholders
+   - `Group` files in `platform/groups/` — one per discovered Console Group that mirrors an IdP group
+   - `Application` for each confirmed team/service boundary, in `platform/applications/<app>/application.yml`
+   - `ApplicationInstance` for each app/cluster combination in `platform/applications/<app>/<instance>.yml` — resource prefixes derived from topic naming, service account from ACL analysis, instance label from the user's mapping
+   - `ApplicationInstancePermission` for each cross-team READ pattern discovered — place each `instance-permissions.yml` in the **owning** application's `applications/<owning-app>/<instance>/` folder (see [section 4](#4-generating-applicationinstancepermission-from-cross-team-read-patterns))
+   - `ApplicationGroup` for each Console Group mapped to an Application, with permissions scoped to the correct ApplicationInstance, in `applications/<app>/<instance>/application-groups.yml`
    - `ResourcePolicy` files in `platform/policies/` — start from the starter policies in [references/resource-policy-examples.md](../../references/resource-policy-examples.md) (topic-naming, topic-labels, topic-rules-dev, topic-rules-prod, subject-rules, connector-rules, appgroup-restrictions). Before generating, present the observed configuration ranges to the user (e.g., "partition counts range from 3–6, replication factor is 3 everywhere, retention ranges from 7d–28d") and ask them to confirm or adjust the policy bounds. Do not silently tune values.
-   - `Topic`, `Subject`, and `Connector` resources placed in the correct `applications/<app>/<env>/` folder
-   - Supporting files: `README.md`, `.github/CODEOWNERS`, `.github/workflows/apply-platform.yml`, `.github/workflows/apply-apps.yml`
+   - `Topic`, `Subject`, and `Connector` resources placed in the correct `applications/<app>/<instance>/` folder
+   - Do **not** generate `.github/CODEOWNERS`, `.github/workflows/*.yml`, or the starter `README.md` — these come from the [official template](https://github.com/conduktor/self-service-template) and should be inherited by cloning the template, not regenerated. Customize the template's CODEOWNERS with the discovered application teams.
 9. Present a summary of everything generated and offer to review any file
 10. Offer to dry-run the platform resources: `conduktor apply -f platform/ -r --dry-run`
 
@@ -52,8 +59,9 @@ The CLI has two scopes: **global** resources (fetched via `conduktor get all -c`
 
 | Kind | What it reveals | Ownership signal |
 |---|---|---|
-| `KafkaCluster` | Cluster IDs and configs | Environment boundaries (dev-cluster, prod-cluster) |
-| `Group` | Console Groups with cluster-scoped permissions | Which humans can see/manage which topics |
+| `KafkaCluster` | Cluster IDs and configs | Instance boundaries (which cluster maps to which `<instance>` — environment, region, classification, etc.) |
+| `KafkaConnectCluster` | Connect cluster registrations | Goes into `platform/clusters/<instance>/` alongside the matching KafkaCluster |
+| `Group` | Console Groups with cluster-scoped permissions | Which humans can see/manage which topics; goes into `platform/groups/` |
 
 **Cluster-scoped resources** (for each cluster):
 
@@ -143,7 +151,7 @@ Maps to:
   2. orders-prod grants READ to notifications-prod on LITERAL "orders.completed"
 ```
 
-**Generated `instance-permissions.yml`** (placed in `applications/<owning-app>/<env>/`):
+**Generated `instance-permissions.yml`** (placed in `applications/<owning-app>/<instance>/`):
 
 ```yaml
 ---
@@ -183,28 +191,32 @@ Group "payments-developers":
 
 If a group has permissions spanning multiple prefix groups, it may be an admin/platform group rather than an application group. Flag these for the user to decide.
 
-### 6. Mapping clusters to environments
+### 6. Mapping clusters to instances
 
-Ask the user how clusters map to environments. Common patterns:
+Ask the user how clusters map to ApplicationInstances. The instance axis is not necessarily environment — see [self-service-github-cicd-cli.md](self-service-github-cicd-cli.md#about-the-instance-slot) for the dimensions an instance can represent. Common patterns when the axis is environment:
 
-| Cluster ID | Environment |
+| Cluster ID | Instance |
 |---|---|
 | `dev-cluster` | `dev` |
 | `staging-cluster` or `stag-cluster` | `stag` |
 | `prod-cluster` or `production` | `prod` |
 
-This mapping determines the `metadata.labels.env` on each ApplicationInstance and the folder structure under `applications/<app>/<env>/`.
+But also consider: region (`prod-us-east`, `prod-eu-west`), data classification (`pii`, `non-pii`), regulatory domain (`sox`, `pci`), workload tier (`critical`, `batch`), or tenant (`tenant-acme`). Ask before assuming.
+
+This mapping determines the `metadata.labels.instance` on each ApplicationInstance and the folder structure under `applications/<app>/<instance>/`.
 
 ### 7. Rollout strategy
 
 Self-service resources should be applied in dependency order:
 
-1. **ResourcePolicies** — define guardrails before anything else
-2. **Applications** — create the logical groupings
-3. **ApplicationInstances** — bind apps to clusters (this creates Kafka ACLs for the service accounts)
-4. **Topics, Subjects, Connectors** — declare existing resources under self-service ownership (idempotent)
-5. **ApplicationGroups** — migrate Console UI permissions to self-service managed groups
-6. **ApplicationInstancePermissions** — formalize cross-team access
+1. **KafkaClusters / KafkaConnectClusters** — defined in `platform/clusters/<instance>/`, applied via `apply-clusters.yml` with instance-scoped credentials
+2. **Groups** — Console Groups in `platform/groups/`, mirrored from external IdP
+3. **ResourcePolicies** — define guardrails before anything that references them
+4. **Applications** — create the logical groupings
+5. **ApplicationInstances** — bind apps to clusters (this creates Kafka ACLs for the service accounts)
+6. **Topics, Subjects, Connectors** — declare existing resources under self-service ownership (idempotent)
+7. **ApplicationGroups** — migrate Console UI permissions to self-service managed groups
+8. **ApplicationInstancePermissions** — formalize cross-team access
 
 The agent offers to `--dry-run` each step before applying.
 
@@ -221,5 +233,8 @@ The agent offers to `--dry-run` each step before applying.
 | Forgetting to set `serviceAccount` on ApplicationInstance | Each instance needs a unique SA per cluster. Conduktor creates Kafka ACLs for this SA automatically. |
 | Applying ApplicationGroups before the Application and ApplicationInstance exist | Resources must be applied in dependency order: Application → ApplicationInstance → ApplicationGroup. |
 | Treating Console Group permissions as the only ownership signal | Console Groups control UI access only. Service account ACLs are the authoritative Kafka-level ownership signal. |
-| Placing `instance-permissions.yml` in the consuming app's folder | The **owning** ApplicationInstance creates the permission. Place it in `applications/<owning-app>/<env>/`. |
+| Placing `instance-permissions.yml` in the consuming app's folder | The **owning** ApplicationInstance creates the permission. Place it in `applications/<owning-app>/<instance>/`. |
+| Regenerating workflows, CODEOWNERS, or starter policies from scratch | These live in the official [conduktor/self-service-template](https://github.com/conduktor/self-service-template) and are kept current there. Clone the template and only customize CODEOWNERS team slugs and policy thresholds. |
+| Defaulting to `dev`/`stag`/`prod` instances without asking | Instance can be region, classification, tenant, etc. Ask the user what dimension matters before naming instances. |
+| Embedding cluster credentials directly in `platform/clusters/<instance>/*.yml` | Replace credentials with `${VAR}` placeholders; supply the values via `kafka-<instance>` GitHub Environment secrets. |
 | Ignoring READ ACLs on foreign prefixes | READ ACLs on prefixes owned by another Application are cross-team consumption patterns — generate an `ApplicationInstancePermission` for each one. |

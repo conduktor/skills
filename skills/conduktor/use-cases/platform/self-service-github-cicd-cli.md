@@ -2,82 +2,140 @@
 
 How to structure a GitHub repository for Conduktor self-service, where application teams manage their own Kafka resources through code while a platform team controls admin-level resources.
 
+## Start from the official template
+
+The canonical scaffolding lives at **<https://github.com/conduktor/self-service-template>**. It is maintained by Conduktor and updated as the platform evolves. Direct users to clone or fork it as the starting point — do not hand-write a repo from scratch when the template already exists.
+
+### Agent: how to bootstrap a copy
+
+Before running anything, check whether the GitHub CLI is available with `gh --version`. Then:
+
+**If `gh` is available** — use it to create a new private repo from the template (cleanest: fresh history, repo created on GitHub in one step):
+
+```
+gh repo create my-org/conduktor-self-service \
+  --template conduktor/self-service-template \
+  --private --clone
+```
+
+**If `gh` is NOT available** — tell the user `gh` was not found and ask whether they'd like to fall back to a shallow `git clone` instead. Wait for approval before running. Once approved:
+
+```
+git clone --depth 1 https://github.com/conduktor/self-service-template.git my-repo
+cd my-repo
+rm -rf .git
+git init && git add . && git commit -m "Bootstrap from conduktor/self-service-template"
+```
+
+Then ask the user to create the destination remote (GitHub UI or their VCS of choice) and push. Mention that installing `gh` (`brew install gh` on macOS, see <https://cli.github.com/> otherwise) gives a one-step alternative if they prefer.
+
+If the user has neither `gh` nor `git` (rare), fall back to a tarball: `curl -L https://github.com/conduktor/self-service-template/archive/refs/heads/main.tar.gz | tar xz`.
+
+Use this skill file to explain the resource model, adapt the template to a customer's setup, or generate a matching layout when bootstrapping from existing Console state (see [bootstrap-self-service-cli.md](bootstrap-self-service-cli.md)). For workflow YAML, CODEOWNERS, and starter ResourcePolicies, defer to the template — that is where they are kept current.
+
 ## Repository structure
+
+The template ships with this layout. Any deviation should be a deliberate choice the platform team makes, not a default.
 
 ```
 conduktor-self-service/
 ├── .github/
 │   ├── CODEOWNERS
 │   └── workflows/
-│       ├── apply-platform.yml
-│       └── apply-apps.yml
-├── platform/                  # Admin resources (platform team only)
-│   ├── applications/          # Application + ApplicationInstance definitions
-│   │   └── <app>/
-│   │       ├── application.yml        # Application resource
-│   │       └── <env>.yml              # ApplicationInstance per environment
-│   ├── policies/              # ResourcePolicy rules
-│   └── exceptions/            # Policy exception overrides
-│       └── <app>/<env>/       # Applied with AdminToken to bypass policies
-├── applications/              # App-managed resources (each team owns their folder)
+│       ├── apply-platform.yml      # AdminToken — platform resources (excl. clusters)
+│       ├── apply-clusters.yml      # AdminToken — cluster resources, scoped per instance
+│       └── apply-apps.yml          # ApplicationInstanceToken — scoped per app/instance
+├── applications/                   # App-managed resources (each team owns their folder)
 │   └── <app>/
-│       └── <env>/
+│       └── <instance>/
 │           ├── topics.yml
 │           ├── subjects.yml
 │           ├── connectors.yml
-│           ├── application-groups.yml
-│           └── instance-permissions.yml
+│           ├── application-groups.yml       # Console UI permissions
+│           └── instance-permissions.yml     # Cross-team topic access (owner-side)
+├── platform/                       # Platform team resources only
+│   ├── applications/
+│   │   └── <app>/
+│   │       ├── application.yml     # Application — owner is a Console Group
+│   │       └── <instance>.yml      # ApplicationInstance per instance
+│   ├── clusters/                   # KafkaCluster / KafkaConnectCluster definitions
+│   │   └── <instance>/             # Applied with instance-scoped cluster credentials
+│   ├── groups/                     # Console Groups (map external IdP groups → Console)
+│   ├── policies/                   # ResourcePolicy rules
+│   └── exceptions/                 # Policy exception overrides
+│       └── <app>/<instance>/       # Applied with AdminToken to bypass policies
 └── README.md
 ```
 
-- **`platform/`** — admin resources that define self-service boundaries. Only the platform team modifies these. Applied with an **AdminToken**.
-- **`applications/`** — day-to-day Kafka resources and Console UI permissions that application teams own. Applied with scoped **ApplicationInstanceTokens**.
-- **`platform/exceptions/`** — resources that legitimately need to bypass a ResourcePolicy. Applied by the platform workflow with an AdminToken, which skips policy validation. The application team opens a PR here; only the platform team can approve (via CODEOWNERS).
+| Directory | Owner | Token Type | Purpose |
+|---|---|---|---|
+| `platform/applications/` | Platform team | AdminToken | Application + ApplicationInstance definitions |
+| `platform/clusters/<instance>/` | Platform team | AdminToken (instance-scoped credentials) | KafkaCluster / KafkaConnectCluster per instance |
+| `platform/groups/` | Platform team | AdminToken | Console Groups mirrored from external IdP |
+| `platform/policies/` | Platform team | AdminToken | ResourcePolicy rules |
+| `platform/exceptions/` | Platform team approves; app team authors | AdminToken | Policy exception overrides |
+| `applications/<app>/<instance>/` | Application team | ApplicationInstanceToken | Day-to-day Kafka resources |
+
+### About the `<instance>` slot
+
+`<instance>` corresponds 1:1 to a Self-Service `ApplicationInstance` — a distinct cluster binding, service account, and (usually) policy set. The template uses `dev` and `prod` as examples, but the axis can be anything that warrants its own scope:
+
+- **Environment** — `dev`, `stag`, `prod`
+- **Region / data residency** — `prod-us-east`, `prod-eu-west` (latency, active-active DR, regional data laws)
+- **Data classification** — `pii` vs `non-pii` for tighter ACL/encryption boundaries
+- **Regulatory domain** — `sox`, `pci`, `hipaa`
+- **Workload tier** — `critical`, `batch`, `analytics`
+- **Tenant** (multi-tenant apps) — `tenant-acme`, `tenant-globex`
+- **Cluster migration** — `legacy` vs `next-gen` during an upgrade
+
+Do not assume `dev/stag/prod`. Ask the user what dimensions matter to them.
 
 ## Token types
 
 | Token Type | Scope | Use in CI/CD |
 |---|---|---|
-| **AdminToken** | Full platform access | Platform workflow (`apply-platform.yml`) only |
-| **ApplicationInstanceToken** | Scoped to a single application instance | Application workflows (`apply-apps.yml`) — one per app/env |
+| **AdminToken** | Full platform access | `apply-platform.yml` and `apply-clusters.yml` |
+| **ApplicationInstanceToken** | Scoped to a single ApplicationInstance | `apply-apps.yml` — one per app/instance |
 
-**Do not use AdminTokens for application workflows.** ApplicationInstanceTokens enforce that a team can only modify resources within their own application instance boundaries.
-
+**Do not use AdminTokens for application workflows.** ApplicationInstanceTokens enforce that a team can only modify resources within their own instance boundaries.
 
 ## GitHub Environments
 
-Create a GitHub Environment for each scope. Each stores its own secrets and variables that the workflow maps to CLI env vars.
+Each scope maps to a GitHub Environment with its own secrets and variables.
 
-| GitHub Environment | Token Type | Description |
-|---|---|---|
-| `platform` | AdminToken | Applies platform resources |
-| `<app>-<env>` (e.g. `payments-dev`) | ApplicationInstanceToken | Scoped to that app/env |
+| GitHub Environment | Token Type | Used by | Description |
+|---|---|---|---|
+| `platform` | AdminToken | `apply-platform.yml` | Applies all `platform/` resources except `platform/clusters/` |
+| `kafka-<instance>` (e.g. `kafka-prod`) | AdminToken + cluster credentials | `apply-clusters.yml` | Applies KafkaCluster/KafkaConnectCluster for that instance — needs cluster credential secrets |
+| `<app>-<instance>` (e.g. `payments-prod`) | ApplicationInstanceToken | `apply-apps.yml` | Scoped to that app/instance |
 
 Each environment needs:
 - `CDK_API_KEY` (secret) — AdminToken or ApplicationInstanceToken depending on scope
-- `CDK_BASE_URL` (variable) — Console URL (per-environment if dev/stag/prod use different instances)
-- `CDK_STATE_REMOTE_URI` (variable) — per-app/env remote state path (e.g. `s3://conduktor-state/payments/dev/`)
-- `AWS_ROLE_ARN` (variable) — IAM role scoped to this environment's state path (see State isolation below)
+- `CDK_BASE_URL` (variable) — Console URL
+- `CDK_STATE_REMOTE_URI` (variable) — distinct remote state path (e.g. `s3://conduktor-state/payments/prod/`)
+- `AWS_ROLE_ARN` (variable) — IAM role scoped to this environment's state path
 
-For production environments, add deployment protection rules such as required reviewers or wait timers.
+`kafka-<instance>` environments additionally hold cluster credential secrets that the cluster YAML references via `${VAR}` placeholders: `KAFKA_BOOTSTRAP_SERVERS`, `KAFKA_CREDENTIALS`, `SR_USER`, `SR_PASSWORD`, `KAFKA_CONNECT_URL`, `KAFKA_CONNECT_USERNAME`, `KAFKA_CONNECT_PASSWORD`.
+
+For production environments, add deployment protection rules (required reviewers, wait timers).
 
 ### State isolation
 
-Each app/env gets its own state file and cloud IAM role. This prevents one application's workflow from reading or writing another application's state.
+Each environment carries its own `CDK_STATE_REMOTE_URI` and `AWS_ROLE_ARN`. One workflow's state cannot be read or written by another. The IAM role's trust policy is pinned to its corresponding GitHub Environment via OIDC.
 
-**AWS (S3):** Create an IAM role per app/env with a trust policy pinned to the GitHub Environment via OIDC, and an S3 policy scoped to that app's state prefix:
+**AWS (S3):** Each app/instance gets an IAM role with a trust policy pinned to its GitHub Environment and an S3 policy scoped to its state prefix:
 
 ```json
 {
   "Effect": "Allow",
   "Action": ["s3:GetObject", "s3:PutObject"],
-  "Resource": "arn:aws:s3:::conduktor-state/payments/dev/*"
+  "Resource": "arn:aws:s3:::conduktor-state/payments/prod/*"
 }
 ```
 
 The workflows use GitHub OIDC federation (`aws-actions/configure-aws-credentials` with `role-to-assume`) — no static AWS keys.
 
-**GCS / Azure Blob:** The same principle applies. Use Workload Identity Federation (GCS) or federated credentials (Azure) instead of OIDC, and scope the IAM/RBAC policy to the app's state prefix. The workflow steps will differ — replace the `aws-actions/configure-aws-credentials` step with `google-github-actions/auth` (GCS) or `azure/login` (Azure).
+**GCS / Azure Blob:** The same principle applies. Use Workload Identity Federation (GCS) or federated credentials (Azure) instead of OIDC, scoped to the app/instance state prefix.
 
 ## CODEOWNERS
 
@@ -92,276 +150,106 @@ The workflows use GitHub OIDC federation (`aws-actions/configure-aws-credentials
 
 Enable on `main`: require PR reviews, require Code Owner review, require status checks to pass.
 
-## Platform workflow (`apply-platform.yml`)
-
-Applies admin resources (applications, instances, policies, exceptions) using an AdminToken.
-
-```yaml
-name: Apply Platform Resources
-on:
-  push:
-    branches: [main]
-    paths: ['platform/**']
-  pull_request:
-    paths: ['platform/**']
-
-permissions:
-  id-token: write
-  contents: read
-
-jobs:
-  apply-platform:
-    runs-on: ubuntu-latest
-    environment: platform
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
-          aws-region: us-east-1
-
-      - name: Install Conduktor CLI
-        run: |
-          curl -sL https://github.com/conduktor/ctl/releases/latest/download/conduktor-linux-amd64 -o conduktor
-          chmod +x conduktor
-          sudo mv conduktor /usr/local/bin/
-
-      - name: ${{ github.event_name == 'pull_request' && 'Plan' || 'Apply' }} platform resources
-        run: |
-          conduktor apply \
-            -f platform/ -r \
-            --parallelism 5 \
-            --enable-state \
-            ${{ github.event_name == 'pull_request' && '--dry-run' || '' }}
-        env:
-          CDK_API_KEY: ${{ secrets.CDK_API_KEY }}
-          CDK_BASE_URL: ${{ vars.CDK_BASE_URL }}
-          CDK_STATE_REMOTE_URI: ${{ vars.CDK_STATE_REMOTE_URI }}
-```
-
-## Application workflow (`apply-apps.yml`)
-
-Detects the changed `applications/<app>/<env>/` folder from the git diff and applies with the correct scoped token. Each app/env has its own IAM role and state file for isolation. Fails if changes span multiple app/env combinations or target an unknown environment.
-
-```yaml
-name: Apply Application Resources
-on:
-  push:
-    branches: [main]
-    paths: ['applications/**']
-  pull_request:
-    paths: ['applications/**']
-
-permissions:
-  id-token: write
-  contents: read
-
-jobs:
-  detect:
-    runs-on: ubuntu-latest
-    outputs:
-      app: ${{ steps.find.outputs.app }}
-      env: ${{ steps.find.outputs.env }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - id: find
-        run: |
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            BASE=${{ github.event.pull_request.base.sha }}
-            HEAD=${{ github.event.pull_request.head.sha }}
-          else
-            BASE=${{ github.event.before }}
-            HEAD=${{ github.sha }}
-          fi
-
-          TARGETS=$(git diff --name-only "$BASE" "$HEAD" -- applications/ \
-            | awk -F'/' 'NF>=3 {print $2 "/" $3}' \
-            | sort -u)
-
-          if [ -z "$TARGETS" ]; then
-            echo "::error::No valid app/env changes detected under applications/"
-            exit 1
-          fi
-
-          COUNT=$(echo "$TARGETS" | wc -l)
-          if [ "$COUNT" -ne 1 ]; then
-            echo "::error::Changes must be scoped to a single app/env folder. Found: $TARGETS"
-            exit 1
-          fi
-
-          APP=$(echo "$TARGETS" | cut -d/ -f1)
-          ENV=$(echo "$TARGETS" | cut -d/ -f2)
-
-          VALID_ENVS="dev stag prod"
-          if ! echo "$VALID_ENVS" | grep -qw "$ENV"; then
-            echo "::error::Unknown environment '$ENV'. Must be one of: $VALID_ENVS"
-            exit 1
-          fi
-
-          echo "app=$APP" >> "$GITHUB_OUTPUT"
-          echo "env=$ENV" >> "$GITHUB_OUTPUT"
-          echo "Detected target: $APP/$ENV"
-
-  apply:
-    needs: detect
-    runs-on: ubuntu-latest
-    environment: ${{ needs.detect.outputs.app }}-${{ needs.detect.outputs.env }}
-    steps:
-      - uses: actions/checkout@v4
-
-      # OIDC federation — each GitHub Environment has its own AWS_ROLE_ARN,
-      # and the IAM role trust policy is pinned to that environment.
-      - uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
-          aws-region: us-east-1
-
-      - name: Install Conduktor CLI
-        run: |
-          curl -sL https://github.com/conduktor/ctl/releases/latest/download/conduktor-linux-amd64 -o conduktor
-          chmod +x conduktor
-          sudo mv conduktor /usr/local/bin/
-
-      - name: ${{ github.event_name == 'pull_request' && 'Plan' || 'Apply' }} resources
-        run: |
-          conduktor apply \
-            -f "applications/${{ needs.detect.outputs.app }}/${{ needs.detect.outputs.env }}" \
-            --parallelism 5 \
-            --enable-state \
-            ${{ github.event_name == 'pull_request' && '--dry-run' || '' }}
-        env:
-          CDK_API_KEY: ${{ secrets.CDK_API_KEY }}
-          CDK_BASE_URL: ${{ vars.CDK_BASE_URL }}
-          CDK_STATE_REMOTE_URI: ${{ vars.CDK_STATE_REMOTE_URI }}
-```
-
 ## How the workflows work
 
-**On pull request (plan):** `conduktor apply --dry-run` validates resources against the live instance. Policy violations surface here before merge.
+The three workflows in the template repo handle the three scopes:
 
-**On push to main (apply):** The workflow selects the corresponding GitHub Environment, providing the scoped `CDK_API_KEY`. The CLI applies all YAML files, ordering resources by dependency. With `--enable-state`, resources removed from YAML are deleted from Conduktor.
+- **`apply-platform.yml`** — triggered by changes under `platform/` (except `platform/clusters/`). Uses the `platform` GitHub Environment with an AdminToken. Applies Applications, ApplicationInstances, Groups, ResourcePolicies, and exceptions.
+- **`apply-clusters.yml`** — triggered by changes under `platform/clusters/<instance>/`. Detects the changed instance from the diff, selects the matching `kafka-<instance>` GitHub Environment so cluster credential secrets resolve correctly, and applies with an AdminToken. Changes must be scoped to a single instance per PR.
+- **`apply-apps.yml`** — triggered by changes under `applications/<app>/<instance>/`. Detects the changed app/instance from the diff, selects the matching `<app>-<instance>` GitHub Environment for a scoped ApplicationInstanceToken. Changes must be scoped to a single app/instance per PR.
+
+**On pull request:** each workflow runs `conduktor apply --dry-run` against the live Console instance. Policy violations surface here before merge.
+
+**On push to main:** the workflow applies the resources. With `--enable-state`, resources removed from YAML are deleted from Conduktor on the next apply.
+
+The exact YAML lives in the template — do not duplicate it in this skill or in a generated repo. If a customer needs a workflow tweak (e.g., self-hosted runner labels, additional pre-apply steps), edit the file from the template, do not regenerate from scratch.
 
 ## Policy violations and exceptions
 
-Conduktor validates resources against any `ResourcePolicy` linked to the ApplicationInstance via `spec.policyRef`. If a rule fails:
+Conduktor validates resources against any `ResourcePolicy` linked via `spec.policyRef`. When a rule fails:
 
 ```
 Error applying Topic "orders.events":
   Policy "topic-naming" violated: Topic name must follow the pattern <app>.<descriptive-name>
 ```
 
-The dry-run step catches these before merge. For legitimate exceptions, place the resource in `platform/exceptions/<app>/<env>/` — the platform workflow applies it with an AdminToken, bypassing policies.
+The dry-run step catches these before merge. For legitimate exceptions, place the resource in `platform/exceptions/<app>/<instance>/`. The platform workflow applies it with an AdminToken, bypassing policies. The application team opens the PR; only the platform team can approve (CODEOWNERS).
 
 ## ResourcePolicy examples
 
-See [references/resource-policy-examples.md](../../references/resource-policy-examples.md) for starter policies (topic-naming, topic-rules-dev, topic-rules-prod, subject-rules, connector-rules, appgroup-restrictions). Place these in `platform/policies/` and link via `spec.policyRef` on each ApplicationInstance.
+The template ships with starter policies in `platform/policies/`:
 
-## Onboarding a new application
+| Policy | Target | Description |
+|---|---|---|
+| `topic-naming` | Topic | Enforces `<app>.<descriptive-name>` naming |
+| `topic-labels` | Topic | Requires `instance`, `business-unit`, `confidentiality`, `team` labels |
+| `topic-rules-dev` | Topic | Dev rules (RF = 3, partitions 1–3) |
+| `topic-rules-prod` | Topic | Strict prod rules (RF = 3, partitions ≤ 12, retention ≥ 1h, ISR ≥ 2) |
+| `subject-rules` | Subject | Requires `-key` or `-value` suffix, explicit compatibility |
+| `connector-rules` | Connector | Allowlists plugin classes, `tasks.max` ≤ 8 |
+| `appgroup-restrictions` | ApplicationGroup | No direct members, read-only on prod topics |
+
+For the YAML bodies and CEL syntax notes, see [references/resource-policy-examples.md](../../references/resource-policy-examples.md). Tune values to the customer's environment.
+
+## Onboarding
+
+### Platform bootstrap (one-time)
+
+Before any application can be onboarded, the platform team sets up shared infrastructure:
+
+1. Create `platform/clusters/<instance>/*.yml` for each Kafka and Kafka Connect cluster. Use `${VAR}` placeholders for credentials.
+2. Create `platform/groups/*.yml` for each Console `Group` mirroring an external IdP group.
+3. Seed `platform/policies/` with the ResourcePolicies you want enforced.
+4. Create the `platform` GitHub Environment with `CDK_API_KEY` (AdminToken), `CDK_BASE_URL`, `CDK_STATE_REMOTE_URI`, `AWS_ROLE_ARN`.
+5. Create a `kafka-<instance>` GitHub Environment for each cluster instance with the same four variables plus the cluster credential secrets (`KAFKA_BOOTSTRAP_SERVERS`, `KAFKA_CREDENTIALS`, `SR_USER`, `SR_PASSWORD`, `KAFKA_CONNECT_URL`, `KAFKA_CONNECT_USERNAME`, `KAFKA_CONNECT_PASSWORD`).
+
+### Onboard a new application
 
 **Platform team:**
 
-1. Create `platform/applications/<app>/application.yml` (Application resource with `spec.owner` pointing to a Console Group)
-2. Create `platform/applications/<app>/<env>.yml` for each environment (ApplicationInstance with cluster, serviceAccount, policyRef, resources)
-3. Create an IAM role per app/env scoped to its state prefix (e.g. `s3://conduktor-state/<app>/<env>/`), with OIDC trust pinned to the GitHub Environment. For GCS use Workload Identity Federation; for Azure use federated credentials.
-4. Create GitHub Environments (`<app>-<env>`) with:
+1. Create `platform/applications/<app>/application.yml` (Application with `spec.owner` → Console Group)
+2. Create `platform/applications/<app>/<instance>.yml` per instance (ApplicationInstance with cluster, serviceAccount, policyRef, resources)
+3. Create an IAM role per app/instance scoped to its state prefix (e.g. `s3://conduktor-state/<app>/<instance>/`), with OIDC trust pinned to the GitHub Environment
+4. Create GitHub Environments (`<app>-<instance>`) with:
    - `CDK_API_KEY` (secret) — ApplicationInstanceToken
-   - `CDK_BASE_URL` (variable) — Console URL
-   - `CDK_STATE_REMOTE_URI` (variable) — e.g. `s3://conduktor-state/<app>/<env>/`
-   - `AWS_ROLE_ARN` (variable) — the IAM role from step 3
+   - `CDK_BASE_URL`, `CDK_STATE_REMOTE_URI`, `AWS_ROLE_ARN` (variables)
 5. Add CODEOWNERS entry: `/applications/<app>/  @org/<app>-team @org/platform-team`
 6. Grant the team repo write access
 
 **Application team:**
 
-1. Create `applications/<app>/<env>/` folders with `topics.yml`, `application-groups.yml`, etc.
-2. Define resources within the boundaries set by the platform team (topic prefixes, policies)
-3. Open a PR — dry-run validates. After review and merge, resources are applied automatically.
+1. Create `applications/<app>/<instance>/topics.yml` with topics matching the ApplicationInstance resource prefix
+2. Add `application-groups.yml` for Console UI permissions
+3. Add `instance-permissions.yml` if cross-team topic access is needed (see [request-access](../app-developer/request-access.md))
+4. Open a PR — dry-run validates against policies. After review and merge, resources apply automatically.
 
-No workflow changes needed — the detection logic handles new applications automatically.
+No workflow changes needed — the detection logic handles new apps and instances automatically.
 
 ## Labels convention
 
 | Label | Purpose | Example |
 |---|---|---|
-| `env` | Environment identifier | `dev`, `stag`, `prod` |
+| `instance` | ApplicationInstance identifier | `dev`, `stag`, `prod`, `prod-us-east` |
 | `business-unit` | Organizational grouping | `finance`, `risk`, `logistics` |
 | `confidentiality` | Data classification | `public`, `internal`, `restricted` |
-| `team` | Owning team | `payments-team` |
+| `team` | Owning team | `payments-owners` |
+
+Note: the template uses `instance` (matching the `ApplicationInstance` concept) rather than `env`, since an instance can correspond to environment, region, classification, tenant, etc. The `topic-labels` ResourcePolicy in [resource-policy-examples.md](../../references/resource-policy-examples.md) enforces this label.
 
 ## Generated README
 
-When generating the repository, include a `README.md` at the root that explains the federated ownership model and how teams interact with the repo. Cover these sections:
-
-### Key Concepts
-
-Before diving in, understand the Conduktor self-service resource hierarchy:
-
-1. **[Application](https://docs.conduktor.io/guide/reference/self-service-reference#application)** — a logical grouping representing a team or service (admin resource)
-2. **[ApplicationInstance](https://docs.conduktor.io/guide/reference/self-service-reference#applicationinstance)** — links an Application to a specific Kafka cluster/environment, defines ownership, and creates service account and user permissions (admin resource)
-3. **[ResourcePolicy](https://docs.conduktor.io/guide/reference/self-service-reference#resourcepolicy)** — CEL-based validation rules enforced at apply time (admin resource)
-4. **[ApplicationInstancePermission](https://docs.conduktor.io/guide/reference/self-service-reference#applicationinstancepermission)** — grants another application instance access to your topics, enabling cross-team collaboration (app-managed resource)
-5. **[ApplicationGroup](https://docs.conduktor.io/guide/reference/self-service-reference#applicationgroup)** — defines Console UI permissions for team members within an application (app-managed resource)
-6. **[Topic](https://docs.conduktor.io/guide/reference/kafka-reference#topic), [Subject](https://docs.conduktor.io/guide/reference/kafka-reference#subject), [Connector](https://docs.conduktor.io/guide/reference/kafka-reference#connector)** — the actual Kafka resources teams manage day-to-day (app-managed resources)
-
-Admin resources (`Application`, `ApplicationInstance`, `ResourcePolicy`) are managed exclusively by the platform team. Application teams manage their own Kafka resources within the boundaries the platform team has defined.
-
-All resources follow a Kubernetes-style declarative format:
-
-```yaml
-apiVersion: self-serve/v1  # or kafka/v2 for Kafka resources
-kind: <ResourceKind>
-metadata:
-  name: resource-name
-  labels:
-    key: value
-spec:
-  # Resource-specific fields
-```
-
-### Repo overview and structure
-
-Explain the split: `platform/` is admin-level resources (Application, ApplicationInstance, ResourcePolicy) managed exclusively by the platform team with an AdminToken. `applications/<app>/<env>/` contains day-to-day Kafka resources (topics, subjects, connectors, application groups, instance permissions) owned by each application team using a scoped ApplicationInstanceToken. Include the directory tree from the [Repository structure](#repository-structure) section and a table mapping each directory to its owner, token type, and purpose.
-
-### How CI/CD works
-
-- **Pull requests** run `conduktor apply --dry-run` against the live Console instance. Policy violations surface before merge.
-- **Merges to main** apply resources automatically. The platform workflow (`apply-platform.yml`) uses an AdminToken; the application workflow (`apply-apps.yml`) detects the changed `<app>/<env>` folder and selects the matching GitHub Environment for a scoped ApplicationInstanceToken.
-- **Policy exceptions** go in `platform/exceptions/<app>/<env>/`. The platform workflow applies them with an AdminToken, bypassing policy validation. Application teams open the PR; only the platform team can approve (CODEOWNERS).
-
-### Onboard a new application
-
-Two checklists — platform team and application team:
-
-**Platform team:**
-1. Create `platform/applications/<app>/application.yml` (`spec.owner` → Console Group)
-2. Create `platform/applications/<app>/<env>.yml` per environment (ApplicationInstance with cluster, serviceAccount, policyRef, resources)
-3. Create an IAM role per app/env scoped to the state prefix (e.g., `s3://conduktor-state/<app>/<env>/`)
-4. Create GitHub Environments (`<app>-<env>`) with `CDK_API_KEY`, `CDK_BASE_URL`, `CDK_STATE_REMOTE_URI`, `AWS_ROLE_ARN`
-5. Add CODEOWNERS entry: `/applications/<app>/  @org/<app>-team @org/platform-team`
-
-**Application team:**
-1. Create `applications/<app>/<env>/topics.yml` with topics matching the ApplicationInstance resource prefix
-2. Add `application-groups.yml` for Console UI permissions
-3. Add `instance-permissions.yml` if cross-team topic access is needed (see [request-access](../app-developer/request-access.md))
-4. Open a PR — dry-run validates against policies. After review and merge, resources apply automatically.
-
-Admin and application API keys can be managed in the UI or via `conduktor token` subcommand.
-
-### Labels convention
-
-Include the labels table from the [Labels convention](#labels-convention) section so teams know which labels to set on their resources.
+When generating a repo from scratch (e.g. via [bootstrap-self-service-cli.md](bootstrap-self-service-cli.md)), use the template's [README.md](https://github.com/conduktor/self-service-template/blob/main/README.md) as the baseline. It already covers Key Concepts, Repository Structure, How CI/CD Works, State Isolation, Onboarding, Labels, and Included Resource Policies. Customize it with the customer's specific applications, instances, and Console URL — do not rewrite the structural sections.
 
 ## Common mistakes
 
 | Mistake | Fix |
 |---|---|
-| Using AdminToken for application workflows | Use ApplicationInstanceTokens — they enforce app/env boundaries |
-| Changes spanning multiple app/env folders in one PR | The `apply-apps.yml` workflow validates a single folder per PR. Split into separate PRs. |
-| Not creating GitHub Environments before merging the first PR | The workflow selects a GitHub Environment by name. Missing environments cause failures. |
-| Applying exceptions through the app workflow | Exceptions must go through `platform/exceptions/` and the platform workflow (AdminToken bypasses policies) |
+| Hand-rolling the repo instead of cloning the template | Use `gh repo create --template conduktor/self-service-template`. The template is maintained — your hand-rolled version drifts. |
+| Using `<env>` folders instead of `<instance>` | The template uses `<instance>` to align with the `ApplicationInstance` resource. Folder name should match the instance label. |
+| Skipping `apply-clusters.yml` and putting clusters in `apply-platform.yml` | Cluster resources need instance-scoped credentials (`KAFKA_BOOTSTRAP_SERVERS` etc.). Keeping them in a separate workflow with per-instance environments isolates those secrets. |
+| Using AdminToken for application workflows | Use ApplicationInstanceTokens — they enforce app/instance boundaries |
+| Changes spanning multiple app/instance folders in one PR | The detection logic validates a single folder per PR. Split into separate PRs. |
+| Not creating GitHub Environments before merging the first PR | Workflows select environments by name. Missing environments cause failures. |
+| Applying exceptions through the app workflow | Exceptions must go through `platform/exceptions/` and `apply-platform.yml` (AdminToken bypasses policies) |
 | Missing CODEOWNERS entry for a new app | Without it, only the platform team can approve — the app team won't be listed as required reviewers for their own folder |
-| README missing onboarding steps | Teams won't know how to get started. Always include both platform and application team checklists. |
+| Confusing `Group` (kind `Group`, `apiVersion: v2`) with `ApplicationGroup` (kind `ApplicationGroup`, `apiVersion: self-serve/v1`) | They are distinct resources. `Group` mirrors an IdP group into Console; `ApplicationGroup` grants Console UI access to members of a `Group` within an Application. |

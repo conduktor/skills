@@ -2,7 +2,7 @@
 
 Resource policies (`apiVersion: self-serve/v1`, `kind: ResourcePolicy`) enforce CEL-expression-based rules on resources. They can target `Topic`, `Connector`, `Subject`, or `ApplicationGroup` via `spec.targetKind`. Policies are not applied automatically — link them via `spec.policyRef` on an Application or ApplicationInstance, or via `spec.policiesRef` on a KafkaCluster or KafkaConnectCluster. Only AdminTokens can manage policies.
 
-Below are starter policies for self-service. Place in `platform/policies/` and tune values to match your environment.
+Below are starter policies for self-service. They mirror the policies that ship with the official [conduktor/self-service-template](https://github.com/conduktor/self-service-template) repo — clone the template to get them in place rather than hand-copying. Tune the values to match your environment.
 
 ## Topic naming (`topic-naming.yml`)
 
@@ -21,7 +21,9 @@ spec:
 
 ## Topic label conventions (`topic-labels.yml`)
 
-Enforces the standard label set on every topic. Adapt the allowed values to match your organization. Uses `"key" in metadata.labels` (not `has()`) because hyphenated keys require bracket notation in CEL.
+Enforces the standard label set on every topic, matching the convention in the [official self-service template](https://github.com/conduktor/self-service-template). Adapt the allowed values to match your organization. Uses `"key" in metadata.labels` (not `has()`) because hyphenated keys require bracket notation in CEL.
+
+The `instance` label aligns with the `ApplicationInstance` resource name and the `<instance>` folder slot in the repo. It is more flexible than `env` — an instance can correspond to environment, region, data classification, regulatory domain, workload tier, or tenant. If your org already uses an `env` label, substitute it; just keep the label name consistent across topics, ApplicationInstances, and the folder structure.
 
 ```yaml
 apiVersion: self-serve/v1
@@ -32,8 +34,8 @@ spec:
   targetKind: Topic
   description: "Enforces required labels on topics"
   rules:
-    - condition: has(metadata.labels.env) && metadata.labels["env"] in ["dev", "stag", "prod"]
-      errorMessage: "Topics must have an 'env' label set to one of: dev, stag, prod"
+    - condition: has(metadata.labels.instance) && metadata.labels["instance"] in ["dev", "stag", "prod"]
+      errorMessage: "Topics must have an 'instance' label set to one of: dev, stag, prod"
     - condition: >
         "business-unit" in metadata.labels
         && metadata.labels["business-unit"].size() > 0

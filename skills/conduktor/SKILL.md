@@ -42,8 +42,8 @@ For Conduktor-to-Kafka terminology mapping, see [references/terminology.md](refe
 | Set up multi-tenancy (virtual clusters, ACLs, service accounts) | [use-cases/platform/multi-tenancy.md](use-cases/platform/multi-tenancy.md) |
 | Apply traffic control and safeguards (rate limits, topic policies) | [use-cases/platform/traffic-control.md](use-cases/platform/traffic-control.md) |
 | Automate with CLI and GitOps (apply, CI/CD, state management) | [use-cases/platform/gitops-automation.md](use-cases/platform/gitops-automation.md) |
-| Set up self-service GitHub CI/CD (workflows, CODEOWNERS, tokens, policies) | [use-cases/platform/self-service-github-cicd-cli.md](use-cases/platform/self-service-github-cicd-cli.md) |
-| Bootstrap self-service from existing clusters, topics, and permissions | [use-cases/platform/bootstrap-self-service-cli.md](use-cases/platform/bootstrap-self-service-cli.md) |
+| Set up self-service GitHub CI/CD (workflows, CODEOWNERS, tokens, policies) — based on the official [conduktor/self-service-template](https://github.com/conduktor/self-service-template) | [use-cases/platform/self-service-github-cicd-cli.md](use-cases/platform/self-service-github-cicd-cli.md) |
+| Bootstrap self-service from existing clusters, topics, and permissions (generates a repo matching the [official template](https://github.com/conduktor/self-service-template)) | [use-cases/platform/bootstrap-self-service-cli.md](use-cases/platform/bootstrap-self-service-cli.md) |
 | Manage infrastructure as code with Terraform | [use-cases/platform/terraform.md](use-cases/platform/terraform.md) |
 
 ### Application developer
