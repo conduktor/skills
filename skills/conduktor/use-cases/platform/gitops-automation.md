@@ -208,7 +208,7 @@ When state is enabled, `apply` compares the resource list in the YAML files agai
 
 ## CI/CD patterns
 
-For the full self-service GitHub repo pattern (two-workflow structure, CODEOWNERS, token scoping, ResourcePolicy examples, onboarding checklist), see [self-service-github-cicd-cli.md](self-service-github-cicd-cli.md).
+For the full self-service GitHub repo pattern (three-workflow structure, CODEOWNERS, token scoping, ResourcePolicy examples, onboarding checklist), see [self-service-github-cicd-cli.md](self-service-github-cicd-cli.md). The canonical scaffolding lives at [conduktor/self-service-template](https://github.com/conduktor/self-service-template) — start there rather than hand-rolling a repo.
 
 ### Simple single-workflow example
 
