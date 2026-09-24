@@ -19,7 +19,7 @@
    - Ask: bootstrap servers, auth type (PLAINTEXT, SASL_PLAINTEXT, SASL_SSL, SSL), credentials
    - Ask: schema registry URL if applicable
    - Ask: want Gateway too or Console only?
-   - Generate a `docker-compose.yml` or `helm values.yaml` with the correct `KAFKA_*` env vars for that flavor
+   - For Gateway, generate the `KAFKA_*` env vars for that flavor (see below). Console ignores `KAFKA_*`: register the cluster in Console through the UI, `CDK_CLUSTERS_0_*` env vars, a `clusters:` entry in platform-config, or a `KafkaCluster` resource
    - For Confluent Cloud: include `kafkaFlavor` config with cloud API key, environment ID, cluster ID
    - For AWS MSK with IAM: include IAM callback handler config
    - Offer to run `docker compose up -d` or `helm install`
@@ -28,14 +28,15 @@
    - Ask: Docker Compose or Helm/K8s?
    - Ask: Console only, Gateway only, or both?
    - Ask: auth method? (local users, LDAP/AD, OAuth2/OIDC via Auth0/Okta/Cognito)
-   - Ask: license key? (required — Console is free, Gateway requires a license)
+   - Ask: license key? Gateway won't start without one (`GATEWAY_LICENSE_KEY`, 3.18+). Console without a license runs as Community Edition: 50 users, 3 clusters, 2 custom alerts, 1 masking policy, and no self-service, data quality policies or group permissions (`GET /api/public/info/v1/license` shows the exact limits)
    - Ask: external PostgreSQL connection details
    - Generate complete config with all env vars, SSO blocks, monitoring, health probes
    - Include security checklist items in comments
 6. After any deployment, verify health endpoints and help configure CLI auth:
    - `export CDK_BASE_URL=http://localhost:8080`
-   - `export CDK_API_KEY=<from Console UI: Settings > API Keys>`
-   - `conduktor login` or `conduktor get all --console` to verify
+   - `export CDK_API_KEY=<from Console UI: Settings > API Keys>`, or without the UI: `CDK_USER=admin@company.io CDK_PASSWORD='<pwd>' conduktor token create admin cli`
+   - `conduktor run whoami` to verify (read the output: `run` exits 0 even on errors)
+   - Gateway: `curl -f http://localhost:8888/health/ready`
 
 ## When to use this
 
@@ -47,23 +48,23 @@ When deploying Conduktor Console (UI + API) and/or Gateway (Kafka proxy) via Doc
 
 - Image: `conduktor/conduktor-console`
 - Default port: `8080` (configurable via `CDK_LISTENING_PORT`)
-- Runs as non-root user `conduktor-platform` (UID `10001`, GID `10001`)
+- Runs as non-root user `conduktor` (UID `10001`, GID `10001`); use the numeric IDs in `securityContext`
 - Volume: `/var/conduktor` for internal data
-- JVM: uses container CGroups limits, 80% of container memory for max heap (`-XX:MaxRAMPercentage=80`)
+- JVM: uses container CGroups limits, 70% of container memory for heap (`-XX:MaxRAMPercentage=70`, override with `CONSOLE_MEMORY_OPTS`)
 
 ### Essential environment variables
 
 | Variable | Description | Required |
 |---|---|---|
 | `CDK_DATABASE_URL` | PostgreSQL connection URL: `postgresql://user:pass@host:5432/dbname` | Yes |
-| `CDK_ORGANIZATION_NAME` | Organization name | No (default: `"default"`) |
-| `CDK_ADMIN_EMAIL` | Root admin account email | Yes |
-| `CDK_ADMIN_PASSWORD` | Root admin password. Min 8 chars, mixed case, number, symbol | Yes |
-| `CDK_LICENSE` | License key. Console works without one. Gateway requires a license (`GATEWAY_LICENSE_KEY`) | No (Console) / Yes (Gateway) |
+| `CDK_ORGANIZATION_NAME` | Organization name | No (default: `"Conduktor"`) |
+| `CDK_ADMIN_EMAIL` | Root admin account email | Yes (Helm); in Docker, the first-run onboarding screen can create it |
+| `CDK_ADMIN_PASSWORD` | Root admin password. Min 8 chars, mixed case, number, symbol; a weak one stops Console at startup | With `CDK_ADMIN_EMAIL` |
+| `CDK_LICENSE` | License key. Without one, Console runs as Community Edition (limited, see workflow step 5) | No |
 
 Database URL format: `[jdbc:]postgresql://[user[:password]@][[netloc][:port],...][/dbname][?param1=value1&...]`
 
-Alternative: decompose via `CDK_DATABASE_HOST`, `CDK_DATABASE_PORT`, `CDK_DATABASE_NAME`, `CDK_DATABASE_USERNAME`, `CDK_DATABASE_PASSWORD`.
+Alternative: decompose via `CDK_DATABASE_HOSTS_0_HOST`, `CDK_DATABASE_HOSTS_0_PORT`, `CDK_DATABASE_NAME`, `CDK_DATABASE_USERNAME`, `CDK_DATABASE_PASSWORD`. The older `CDK_DATABASE_HOST`/`_PORT` still work but are deprecated.
 
 ### Docker Compose example
 
@@ -79,32 +80,34 @@ services:
       POSTGRES_USER: "conduktor"
       POSTGRES_PASSWORD: "change_me"
       POSTGRES_HOST_AUTH_METHOD: "scram-sha-256"
+    healthcheck:
+      test: pg_isready -U conduktor -d conduktor
+      interval: 5s
+      retries: 10
 
   conduktor-console:
-    image: conduktor/conduktor-console
+    image: conduktor/conduktor-console:1.47.2   # pin the version
     depends_on:
-      - postgresql
+      postgresql:
+        condition: service_healthy   # Console exits if PG isn't accepting connections yet
+    restart: unless-stopped
     ports:
       - "8080:8080"
     volumes:
       - conduktor_data:/var/conduktor
-    healthcheck:
-      test: curl -f http://localhost:8080/api/health/ready || exit 1
-      interval: 10s
-      start_period: 10s
-      timeout: 5s
-      retries: 3
     environment:
       CDK_DATABASE_URL: "postgresql://conduktor:change_me@postgresql:5432/conduktor"
       CDK_ORGANIZATION_NAME: "demo"
       CDK_ADMIN_EMAIL: "admin@company.io"
       CDK_ADMIN_PASSWORD: "Change_me1!"
-      CDK_LICENSE: "${CDK_LICENSE}"
+      CDK_LICENSE: "${CDK_LICENSE:-}"
 
 volumes:
   pg_data: {}
   conduktor_data: {}
 ```
+
+The image ships its own healthcheck on `/api/health/ready`, so no override is needed.
 
 ### Health check
 
@@ -118,23 +121,31 @@ Returns HTTP 200 when Console is ready. Liveness: `/api/health/live`. Readiness:
 
 ### Docker image and ports
 
-- Image: `conduktor/conduktor-gateway`
-- Default Kafka proxy port: `6969` (set via `GATEWAY_PORT_START`)
-- HTTP management API port: `8888` (set via `GATEWAY_HTTP_PORT`)
-- In port-based routing (default), Gateway opens `GATEWAY_PORT_COUNT` ports starting at `GATEWAY_PORT_START`
+- Image: `conduktor/conduktor-gateway` (pin the tag, e.g. `:3.21.1`)
+- License required: `GATEWAY_LICENSE_KEY`. Since 3.18, Gateway exits with code 98 (`No license found!`) without it
+- Kafka-facing ports: defined per listener (`GATEWAY_LISTENER_<NAME>_PORTS`), e.g. `6969-6974`
+- Admin API and probes: port `8888` (`GATEWAY_HTTP_PORT`), health on `/health/live` and `/health/ready` (the old `/health` was removed in 3.21)
 
 ### Essential environment variables
 
-| Variable | Description | Default |
-|---|---|---|
-| `KAFKA_BOOTSTRAP_SERVERS` | Comma-separated Kafka brokers | (required) |
-| `GATEWAY_PORT_START` | First listening port | `6969` |
-| `GATEWAY_ADVERTISED_HOST` | Hostname returned in metadata for clients | Container hostname |
-| `GATEWAY_ROUTING_MECHANISM` | `port` or `host` (SNI) | `port` |
-| `GATEWAY_SECURITY_MODE` | `GATEWAY_MANAGED` or `KAFKA_MANAGED` | Derived from protocols |
-| `GATEWAY_USER_POOL_SECRET_KEY` | Base64 256-bit key for local service account tokens. Generate: `openssl rand -base64 32` | (required) |
-| `GATEWAY_ADMIN_API_USERS` | Admin API credentials JSON | `[{username: admin, password: conduktor, admin: true}]` |
-| `GATEWAY_SECURED_METRICS` | Require auth for HTTP management API | `true` |
+Since 3.20, networking is configured per listener with `GATEWAY_LISTENER_<NAME>_*`, where `<NAME>` is alphanumeric (`DEFAULT`, `EXTERNAL`…).
+
+| Variable | Description |
+|---|---|
+| `KAFKA_BOOTSTRAP_SERVERS` | Comma-separated Kafka brokers (required) |
+| `GATEWAY_LICENSE_KEY` | License (required since 3.18) |
+| `GATEWAY_SECURITY_MODE` | `GATEWAY_MANAGED` (Gateway authenticates clients) or `KAFKA_MANAGED` (brokers do). Required with listeners |
+| `GATEWAY_ACL_ENABLED` | `true`/`false`. Required with listeners; must be `false` in `KAFKA_MANAGED` |
+| `GATEWAY_LISTENER_<NAME>_SECURITY_PROTOCOL` | `PLAINTEXT`, `SASL_PLAINTEXT`, `SSL` or `SASL_SSL` |
+| `GATEWAY_LISTENER_<NAME>_ROUTING` | `port` (one port per broker) or `sni` (single port, TLS required) |
+| `GATEWAY_LISTENER_<NAME>_PORTS` | Port or range, e.g. `6969-6974` (about 2× the broker count) |
+| `GATEWAY_LISTENER_<NAME>_ADVERTISED_HOST` | Host returned to clients in metadata; must be reachable by them |
+| `GATEWAY_MIN_BROKERID` | Lowest broker ID, for port routing (default `0`) |
+| `GATEWAY_USER_POOL_SECRET_KEY` | Base64 256-bit key signing LOCAL service-account tokens on SASL listeners (`openssl rand -base64 32`) |
+| `GATEWAY_ADMIN_API_USERS` | Admin API users, default `[{username: admin, password: conduktor, admin: true}]`: change it |
+| `GATEWAY_SECURED_METRICS` | Require auth on `/metrics` (default `true`); the admin API is always authenticated |
+
+`GATEWAY_PORT_START`, `GATEWAY_PORT_COUNT`, `GATEWAY_ADVERTISED_HOST`, `GATEWAY_ROUTING_MECHANISM`, `GATEWAY_SECURITY_PROTOCOL`, `GATEWAY_ADVERTISED_SNI_PORT` and `GATEWAY_ADVERTISED_HOST_PREFIX` are legacy globals: deprecated in 3.20, with removal planned in 3.23. Gateway refuses to start when they are mixed with listener variables.
 
 Kafka authentication (when Kafka requires auth):
 
@@ -149,93 +160,40 @@ Kafka authentication (when Kafka requires auth):
 ```yaml
 services:
   conduktor-gateway:
-    image: conduktor/conduktor-gateway
+    image: conduktor/conduktor-gateway:3.21.1
     ports:
-      - "6969:6969"
+      - "6969-6974:6969-6974"   # Kafka listener ports
+      - "8888:8888"             # admin API and health
     environment:
       KAFKA_BOOTSTRAP_SERVERS: kafka1:9092,kafka2:9092
-      GATEWAY_ADVERTISED_HOST: localhost
-      GATEWAY_USER_POOL_SECRET_KEY: "${GATEWAY_SECRET}" # openssl rand -base64 32
+      GATEWAY_LICENSE_KEY: "${GATEWAY_LICENSE_KEY}"
+      GATEWAY_SECURITY_MODE: GATEWAY_MANAGED
+      GATEWAY_ACL_ENABLED: "false"          # dev only
+      GATEWAY_LISTENER_DEFAULT_SECURITY_PROTOCOL: PLAINTEXT
+      GATEWAY_LISTENER_DEFAULT_ROUTING: port
+      GATEWAY_LISTENER_DEFAULT_PORTS: "6969-6974"
+      GATEWAY_LISTENER_DEFAULT_ADVERTISED_HOST: localhost
       GATEWAY_ADMIN_API_USERS: '[{username: admin, password: change_me, admin: true}]'
 ```
 
-### Routing (port-based vs SNI)
+A PLAINTEXT listener can't host virtual clusters or LOCAL service accounts. For those, use `SASL_PLAINTEXT` (`SASL_SSL` in production), `GATEWAY_ACL_ENABLED: "true"` and a `GATEWAY_USER_POOL_SECRET_KEY`.
 
-**Port-based** (default, `GATEWAY_ROUTING_MECHANISM=port`):
-- One port per broker. Ports: `GATEWAY_PORT_START` to `GATEWAY_PORT_START + GATEWAY_PORT_COUNT - 1`
-- `GATEWAY_MIN_BROKERID`: must match lowest `broker.id` in cluster (default `0`)
-- `GATEWAY_PORT_COUNT`: defaults to `(maxBrokerId - minBrokerId) + 3`
-- Simple, no TLS required. Expose port range to clients.
+### Routing (port vs SNI)
 
-**SNI / host-based** (`GATEWAY_ROUTING_MECHANISM=host`):
-- Single port, routes via TLS SNI hostname
-- Requires `SSL` or `SASL_SSL` as `GATEWAY_SECURITY_PROTOCOL`
-- `GATEWAY_ADVERTISED_SNI_PORT`: port returned in metadata (default: `GATEWAY_PORT_START`)
-- `GATEWAY_ADVERTISED_HOST_PREFIX`: broker name prefix (default: `broker`)
-- Requires wildcard TLS cert and DNS setup
+- **Port routing** (`GATEWAY_LISTENER_<NAME>_ROUTING=port`): one port per broker, mapped in order from `GATEWAY_MIN_BROKERID`. Publish the whole range. Non-sequential broker IDs (100, 200, 300) would need a range covering 100–300, so use SNI instead.
+- **SNI routing** (`…_ROUTING=sni`): a single port, routed on the TLS SNI hostname. It needs `SSL`/`SASL_SSL`, a wildcard certificate, and DNS for each broker host (`…_ADVERTISED_HOST_PATTERN`, e.g. `broker-{{nodeId}}.kafka.example.com`). Follow the docs' SNI routing tutorial.
 
 ### Security checklist
 
-1. Generate `GATEWAY_USER_POOL_SECRET_KEY`: `openssl rand -base64 32`
-2. Change default `GATEWAY_ADMIN_API_USERS` credentials
-3. Set `GATEWAY_SECURED_METRICS: true` (default) to require auth on HTTP API
-4. Configure TLS between clients and Gateway in production
-5. Configure TLS between Gateway and Kafka if on untrusted network
+1. Load `GATEWAY_LICENSE_KEY` from a secret, not inline
+2. Change the default `GATEWAY_ADMIN_API_USERS` credentials
+3. SASL listeners with LOCAL service accounts: set a strong `GATEWAY_USER_POOL_SECRET_KEY` and keep it secret
+4. `GATEWAY_ACL_ENABLED: "true"` outside dev in `GATEWAY_MANAGED`
+5. TLS listeners (`SSL`/`SASL_SSL`) for clients in production; TLS to Kafka on untrusted networks
 
 ## Combined deployment (Console + Gateway + PostgreSQL)
 
-### Full Docker Compose
-
-```yaml
-services:
-  postgresql:
-    image: postgres:14
-    hostname: postgresql
-    volumes:
-      - pg_data:/var/lib/postgresql/data
-    environment:
-      POSTGRES_DB: "conduktor"
-      POSTGRES_USER: "conduktor"
-      POSTGRES_PASSWORD: "change_me"
-      POSTGRES_HOST_AUTH_METHOD: "scram-sha-256"
-
-  conduktor-console:
-    image: conduktor/conduktor-console
-    depends_on:
-      - postgresql
-    ports:
-      - "8080:8080"
-    volumes:
-      - conduktor_data:/var/conduktor
-    healthcheck:
-      test: curl -f http://localhost:8080/api/health/ready || exit 1
-      interval: 10s
-      start_period: 10s
-      timeout: 5s
-      retries: 3
-    environment:
-      CDK_DATABASE_URL: "postgresql://conduktor:change_me@postgresql:5432/conduktor"
-      CDK_ORGANIZATION_NAME: "demo"
-      CDK_ADMIN_EMAIL: "admin@company.io"
-      CDK_ADMIN_PASSWORD: "Change_me1!"
-      CDK_LICENSE: "${CDK_LICENSE}"
-
-  conduktor-gateway:
-    image: conduktor/conduktor-gateway
-    ports:
-      - "6969:6969"
-    environment:
-      KAFKA_BOOTSTRAP_SERVERS: kafka1:9092,kafka2:9092
-      GATEWAY_ADVERTISED_HOST: localhost
-      GATEWAY_USER_POOL_SECRET_KEY: "${GATEWAY_SECRET}"
-      GATEWAY_ADMIN_API_USERS: '[{username: admin, password: change_me, admin: true}]'
-
-volumes:
-  pg_data: {}
-  conduktor_data: {}
-```
-
-Assumes Kafka is reachable at `kafka1:9092,kafka2:9092` from the Docker network.
+Put the `postgresql` and `conduktor-console` services and the `conduktor-gateway` service above in one compose file, on the same network and with one `volumes:` block. Kafka must be reachable at `KAFKA_BOOTSTRAP_SERVERS` from that network. To manage Gateway from Console (interceptors, data quality), register Gateway as a cluster in Console and fill its Gateway provider settings (admin API URL and credentials). Console 1.44+ requires Gateway 3.12+.
 
 ## Helm / Kubernetes notes
 
@@ -255,23 +213,38 @@ helm install console conduktor/console \
   --set config.admin.password="Change_me1!" \
   --set config.database.host="postgres-host" \
   --set config.database.port="5432" \
+  --set config.database.name="conduktor" \
   --set config.database.username="conduktor" \
   --set config.database.password="change_me" \
   --set config.license="${CDK_LICENSE}"
 ```
 
-**Gateway chart:**
+`config.database.name` is mandatory: without it the pod crash-loops on `Missing mandatory database name.` Pin the chart with `--version`; a chart release can lag the latest Console patch.
+
+**Gateway chart** (3.21+ generates the listener configuration from `gateway.listeners`):
 ```bash
 helm install gateway conduktor/conduktor-gateway -f values.yaml
 ```
 
-Gateway `values.yaml` uses `gateway.env` for environment variables. Full chart reference: `https://github.com/conduktor/conduktor-public-charts`.
+```yaml
+gateway:
+  licenseKey: "<license>"        # or gateway.secretRef: a Secret holding GATEWAY_LICENSE_KEY
+  securityMode: GATEWAY_MANAGED
+  aclEnabled: "true"
+  env:
+    KAFKA_BOOTSTRAP_SERVERS: "kafka1:9092,kafka2:9092"   # string values only
+  listeners:
+    internal: { securityProtocol: PLAINTEXT, routing: port, ports: ["9092-9098"] }   # chart default
+    # external: { enable: true, securityProtocol: SASL_SSL, routing: sni, ports: ["9092"], advertisedHostPattern: "broker-{{nodeId}}.kafka.example.com" }
+```
+
+Never put legacy network variables (`GATEWAY_PORT_START`, `GATEWAY_ADVERTISED_HOST`…) in `gateway.env`: Gateway refuses to start when they're mixed with the chart's listener variables. Full chart reference: `https://github.com/conduktor/conduktor-public-charts`.
 
 You must provide your own PostgreSQL for Console. Conduktor does not ship a database dependency in the Helm chart.
 
 ## Connecting to existing Kafka clusters
 
-When generating configs for an existing cluster, use the correct `KAFKA_*` env vars for Gateway or Console cluster YAML.
+The `KAFKA_*` env vars below configure Gateway's connection to Kafka. Console reads none of them: it gets its clusters from the UI, `CDK_CLUSTERS_0_*` env vars, `clusters:` in platform-config.yaml, or a `KafkaCluster` resource applied with the CLI.
 
 ### Confluent Cloud
 
@@ -285,10 +258,11 @@ KAFKA_SASL_JAAS_CONFIG: >
   username="<cluster-api-key>" password="<cluster-api-secret>";
 ```
 
-Console cluster YAML (for `conduktor apply` or platform-config.yaml):
+Console cluster entry in platform-config.yaml. This is not a CLI resource: with `conduktor apply`, a cluster is a `kind: KafkaCluster` (`apiVersion: v2`) with `properties` as a map, `schemaRegistry.type: ConfluentLike` and `security.type: BasicAuth`. `conduktor template KafkaCluster` prints the shape.
 ```yaml
 clusters:
   - id: confluent-prod
+    name: "Confluent Prod"      # required: Console won't start without it
     bootstrapServers: pkc-xxxxx.region.aws.confluent.cloud:9092
     properties: |
       security.protocol=SASL_SSL
@@ -374,12 +348,16 @@ Callback URL: `http(s)://<console-host>:<port>/oauth/callback/<config-name>`
 
 ## Common mistakes
 
-1. **Weak admin password** -- `CDK_ADMIN_PASSWORD` requires min 8 chars, uppercase, lowercase, number, and symbol. Console silently fails to create the admin with a weak password.
-2. **PostgreSQL not ready** -- Console crashes on startup if PG is unreachable. Use `depends_on` with healthcheck or init containers.
-3. **Default Gateway admin credentials** -- `GATEWAY_ADMIN_API_USERS` defaults to `admin/conduktor`. Change before exposing.
-4. **Missing `GATEWAY_USER_POOL_SECRET_KEY`** -- Required for all deployments using SASL. Without it, tokens can be forged.
-5. **Port-based routing with non-sequential broker IDs** -- A 3-broker cluster with IDs 100, 200, 300 allocates 203 ports. Use SNI routing instead.
-6. **`GATEWAY_ADVERTISED_HOST` not set** -- Clients receive the container hostname, which is not routable externally. Always set to the host/IP clients use.
-7. **Mixing config file and env vars without understanding precedence** -- Env vars override `platform-config.yaml` values. Secrets can use `_FILE` suffix (e.g., `CDK_LICENSE_FILE=/run/secrets/license`).
-8. **Docker Desktop stale port bindings** -- On macOS, if Console crashes, Docker Desktop may keep the host port (e.g., 8080) allocated even after `docker compose down`. `lsof -i :8080` will show `com.docker` still listening. Fix: either restart Docker Desktop, or remap Console to a different host port (e.g., `"8088:8080"`).
-9. **DNS resolution failures on macOS Docker Desktop** -- Console crashes with `java.net.UnknownHostException: postgresql`. This is a Docker Desktop DNS race condition. `docker compose restart` does NOT fix it because the network is reused. Fix: `docker compose down && docker compose up -d` to recreate the Docker network. Adding `links` to the compose file can also help as a preventive measure.
+| Mistake | Fix |
+|---|---|
+| Weak `CDK_ADMIN_PASSWORD` | Console refuses to start (`Password must contain at least 8 characters…` in the logs). Use 8+ chars with upper, lower, digit and symbol |
+| PostgreSQL not ready when Console starts | Console exits. Use `depends_on: {postgresql: {condition: service_healthy}}` with a `pg_isready` healthcheck, plus `restart` |
+| No `GATEWAY_LICENSE_KEY` | Gateway 3.18+ exits 98 (`No license found!`) |
+| Legacy network vars mixed with `GATEWAY_LISTENER_*`, including in Helm `gateway.env` | Gateway refuses to start. Keep listener variables only |
+| Default Gateway admin credentials | `GATEWAY_ADMIN_API_USERS` defaults to `admin/conduktor`; change it before exposing Gateway |
+| Advertised host not reachable by clients | Set `GATEWAY_LISTENER_<NAME>_ADVERTISED_HOST` (Helm: `advertisedHost`) to the name clients resolve |
+| Port routing with non-sequential broker IDs | IDs 100/200/300 need ports for the whole 100–300 range from `GATEWAY_MIN_BROKERID`; use SNI routing |
+| Helm Console install without `config.database.name` | CrashLoopBackOff on `Missing mandatory database name.` |
+| Precedence between config file and env vars | Env vars override `platform-config.yaml`. Console secrets accept a `_FILE` suffix (e.g. `CDK_LICENSE_FILE=/run/secrets/license`); Gateway has no `_FILE` support (`GATEWAY_ENV_FILE` instead) |
+| Docker Desktop stale port bindings (macOS) | If Console crashes, Docker Desktop may keep the host port allocated after `docker compose down` (`lsof -i :8080` shows `com.docker`). Restart Docker Desktop, or remap the port (e.g. `"8088:8080"`) |
+| DNS resolution failures on macOS Docker Desktop | Console crashes with `java.net.UnknownHostException: postgresql`. `docker compose restart` reuses the network and doesn't fix it; run `docker compose down && docker compose up -d` |

@@ -9,7 +9,7 @@ For the exact bootstrap commands (with a `gh`-available path and a `git clone` f
 1. Run `conduktor token list admin` to verify CLI auth with an AdminToken
 2. If not authenticated, help configure `CDK_BASE_URL` + `CDK_API_KEY`
 3. Export global Console resources and discover clusters:
-   - `conduktor get all -c -o yaml` — global resources: KafkaClusters, KafkaConnectClusters, Groups, and any existing self-service resources (does NOT include cluster-scoped resources like Topics, ServiceAccounts, Subjects, or Connectors)
+   - `conduktor get all -c -o yaml` — global resources: KafkaClusters, Groups, Users, and any existing self-service resources. It does NOT include cluster-scoped kinds (Topics, ServiceAccounts, Subjects, Connectors, KafkaConnectClusters). It exits 0 even when some kinds fail (e.g. license errors on a Community Edition Console), so read stderr
    - Parse the output for `kind: KafkaCluster` entries to get all cluster IDs
    - Keep `KafkaCluster`, `KafkaConnectCluster`, and `Group` definitions for later mapping into `platform/clusters/<instance>/` and `platform/groups/` (step 8). Redact bootstrap-server passwords and Schema Registry credentials to `${VAR}` placeholders before writing them to disk.
 4. Export cluster-scoped resources — for each cluster discovered in step 3, run in parallel:
@@ -41,7 +41,7 @@ For the exact bootstrap commands (with a `gh`-available path and a `git clone` f
    - `ResourcePolicy` files in `platform/policies/` — start from [references/resource-policy-examples.md](../../references/resource-policy-examples.md). Before writing them, present the observed config ranges (e.g. "partition counts 3–6, retention 7d–28d") and ask the user to confirm or adjust the bounds — don't silently tune values.
    - Update CODEOWNERS in the template to match the discovered application teams (replace placeholder team slugs)
 9. Present a summary of everything generated and offer to review any file
-10. Offer to dry-run the platform resources: `conduktor apply -f platform/ -r --dry-run`
+10. Offer to dry-run the platform resources without the cluster folder, whose `${VAR}` credentials aren't set locally: `conduktor apply -f platform/policies -f platform/groups -f platform/applications -r --dry-run`
 
 ## When to use this
 
@@ -60,8 +60,9 @@ The CLI has two scopes: **global** resources (fetched via `conduktor get all -c`
 | Kind | What it reveals | Ownership signal |
 |---|---|---|
 | `KafkaCluster` | Cluster IDs and configs | Instance boundaries (which cluster maps to which `<instance>` — environment, region, classification, etc.) |
-| `KafkaConnectCluster` | Connect cluster registrations | Goes into `platform/clusters/<instance>/` alongside the matching KafkaCluster |
 | `Group` | Console Groups with cluster-scoped permissions | Which humans can see/manage which topics; goes into `platform/groups/` |
+
+`KafkaConnectCluster` is cluster-scoped: fetch it per cluster (next table). It goes into `platform/clusters/<instance>/` alongside the matching KafkaCluster.
 
 **Cluster-scoped resources** (for each cluster):
 
@@ -209,9 +210,9 @@ This mapping determines the `metadata.labels.instance` on each ApplicationInstan
 
 Self-service resources should be applied in dependency order:
 
-1. **KafkaClusters / KafkaConnectClusters** — defined in `platform/clusters/<instance>/`, applied via `apply-clusters.yml` with instance-scoped credentials
-2. **Groups** — Console Groups in `platform/groups/`, mirrored from external IdP
-3. **ResourcePolicies** — define guardrails before anything that references them
+1. **ResourcePolicies** — first. Clusters reference them in `policiesRef` and fail with `Policies not found` if they don't exist yet. Applications and ApplicationInstances reference them in `policyRef`
+2. **KafkaClusters / KafkaConnectClusters** — defined in `platform/clusters/<instance>/`, applied via `apply-clusters.yml` with instance-scoped credentials
+3. **Groups** — Console Groups in `platform/groups/`, mirrored from external IdP
 4. **Applications** — create the logical groupings
 5. **ApplicationInstances** — bind apps to clusters (this creates Kafka ACLs for the service accounts)
 6. **Topics, Subjects, Connectors** — declare existing resources under self-service ownership (idempotent)
@@ -225,7 +226,8 @@ The agent offers to `--dry-run` each step before applying.
 | Mistake | Fix |
 |---|---|
 | Running discovery with an ApplicationInstanceToken instead of AdminToken | Bootstrap requires full visibility. Use an AdminToken for all discovery commands. |
-| Using `conduktor get all -c` and expecting Topics/ServiceAccounts | `get all` only returns global resources. Topics, ServiceAccounts, Subjects, and Connectors are cluster-scoped — fetch them per cluster with `--cluster <id>`. |
+| Using `conduktor get all -c` and expecting Topics/ServiceAccounts | `get all` only returns global resources. Topics, ServiceAccounts, Subjects, Connectors and KafkaConnectClusters are cluster-scoped — fetch them per cluster with `--cluster <id>`. |
+| Adopting existing topics into a repo applied with CLI state, then editing their description or adding labels | Under state that deletes and recreates the topic. Export topics with the metadata you want to keep before the first stateful apply, and dry-run with state before any later edit ([guardrails](../../references/guardrails.md) §3) |
 | Assigning a topic to the wrong Application based on prefix alone | Validate with service account ACLs — the SA with WRITE access is the true owner. |
 | Splitting topic names on the first `.` only | Real topic names use mixed delimiters and multi-segment prefixes (e.g., `prod.us.payments.tx-created`). Tokenize by all delimiters and find the grouping depth from the prefix tree. |
 | Missing cross-team READ patterns | Check all SA ACLs for READ on prefixes they don't own. Each one needs an ApplicationInstancePermission. |

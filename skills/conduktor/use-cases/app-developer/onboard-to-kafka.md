@@ -2,11 +2,11 @@
 
 ## Agent workflow
 
-1. Run `conduktor get ApplicationInstance -o yaml` to find the user's ApplicationInstance, its cluster, and service account
-2. Run `conduktor get KafkaCluster -o yaml` to discover the Gateway bootstrap server address
+1. Run `conduktor run whoami`. With an application-instance token it names the user's ApplicationInstance. Then `conduktor get ApplicationInstance <name> -o yaml` gives its cluster and service account name. Self-service needs a paid Console license ([guardrails](../../references/guardrails.md) §1).
+2. Ask for the Gateway bootstrap address and the client credentials (from the platform team, or a token for a LOCAL service account). Neither comes from the CLI: `get KafkaCluster` needs platform permissions and returns Console's own connection settings, not the app's credentials.
 3. Ask what language/framework the user's application uses (Java, Python, Node.js, Go, etc.)
-4. Generate a complete client connection config with real bootstrap servers, credentials, and SASL settings
-5. Run `conduktor get Topic -o name` to show topics the user has access to
+4. Generate a complete client connection config with the real bootstrap servers, credentials, and SASL settings
+5. Run `conduktor get Topic --cluster <cluster> -o name` to show topics the user has access to
 6. If no ApplicationInstance exists, guide through self-service setup or direct to their platform team
 
 Your platform team runs Conduktor Gateway in front of Kafka. This guide gets you connected and producing/consuming in minutes.
@@ -51,12 +51,13 @@ Ask your platform team which mode they use. There are two options:
 
 #### LOCAL credentials (SASL_PLAINTEXT or SASL_SSL)
 
-Your platform team creates a local service account in Gateway and gives you a username/password token generated from the Gateway token endpoint (`/gateway/v2/tokens`). These tokens have a configurable TTL.
+Your platform team creates a local service account in Gateway and gives you a username/password token generated from the Gateway token endpoint (`POST /gateway/v2/token`, or `conduktor run generateServiceAccountToken`). Each token has the TTL chosen when it is generated.
 
 Client config:
 
 ```properties
-security.protocol=SASL_PLAINTEXT   # or SASL_SSL in production
+# use SASL_SSL in production
+security.protocol=SASL_PLAINTEXT
 sasl.mechanism=PLAIN
 sasl.jaas.config=org.apache.kafka.common.security.plain.PlainLoginModule required \
   username="my-service-account" \
@@ -74,13 +75,15 @@ Your organization's identity provider handles authentication. Gateway verifies t
 ```properties
 security.protocol=SASL_SSL
 sasl.mechanism=OAUTHBEARER
-sasl.login.callback.handler.class=org.apache.kafka.common.security.oauthbearer.secured.OAuthBearerLoginCallbackHandler
+sasl.login.callback.handler.class=org.apache.kafka.common.security.oauthbearer.OAuthBearerLoginCallbackHandler
 sasl.oauthbearer.token.endpoint.url=https://idp.company.internal/oauth/token
 sasl.jaas.config=org.apache.kafka.common.security.oauthbearer.OAuthBearerLoginModule required \
   clientId="my-client-id" \
   clientSecret="my-client-secret" \
   scope="kafka";
 ```
+
+This handler class works with Kafka clients 3.x and 4.x; the `.secured.` variant was removed in 4.0. Kafka 4 clients also refuse token URLs that aren't allow-listed, so start the JVM with `-Dorg.apache.kafka.sasl.oauthbearer.allowed.urls=https://idp.company.internal/oauth/token`.
 
 **mTLS:**
 
@@ -92,7 +95,7 @@ ssl.truststore.location=/path/to/truststore.jks
 ssl.truststore.password=changeit
 ```
 
-Available in both `GATEWAY_MANAGED` and `KAFKA_MANAGED` modes.
+OIDC works in both `GATEWAY_MANAGED` and `KAFKA_MANAGED` modes (in `KAFKA_MANAGED`, the broker validates the token). mTLS client authentication exists only in `GATEWAY_MANAGED`.
 
 ### Java client configuration example
 
@@ -135,7 +138,7 @@ Gateway uses Virtual Clusters to isolate tenants on a shared Kafka cluster.
 
 Your platform team assigns your service account to a virtual cluster. Inside it, you see only your own topics and consumer groups -- no other team's resources are visible.
 
-Behind the scenes, Gateway prefixes your resource names on the physical cluster (e.g., `orders` becomes `vc-teamname.orders`). You never see or manage these prefixes.
+Behind the scenes, Gateway prefixes your resource names on the physical cluster with the virtual cluster name, with no separator: `orders` in virtual cluster `teamname` becomes `teamnameorders`. You never see or manage these prefixes.
 
 ### Topic naming follows your ApplicationInstance pattern
 
@@ -149,13 +152,13 @@ Open the Conduktor Console web UI and navigate to the **Topic Catalog**. It list
 
 From a topic's detail page, you can request access for your application instance if you are not already subscribed.
 
-### CLI: conduktor get topics
+### CLI: conduktor get Topic
 
 ```bash
-conduktor get topics --cluster=my-cluster
+conduktor get Topic --cluster my-cluster -o name
 ```
 
-Lists all topics visible to your credentials.
+Lists the topics your credentials can see on that cluster. The kind name is singular and `--cluster` is required.
 
 ## What happens transparently
 
@@ -178,3 +181,13 @@ Your platform team may set throughput limits per virtual cluster or service acco
 - [Create a topic](create-topic.md) -- create and configure topics within your namespace
 - [Produce and consume](produce-consume.md) -- end-to-end produce/consume walkthrough
 - [Request access to another team's topic](request-access.md) -- use ApplicationInstancePermission or the Console UI
+
+## Common mistakes
+
+| Mistake | Fix |
+|---|---|
+| Pointing clients at the Kafka brokers | Use the Gateway bootstrap address your platform team gives you |
+| Expecting the CLI to hand out client credentials | Credentials come from the platform team, a Gateway token (LOCAL service account), or your IdP |
+| `...oauthbearer.secured.OAuthBearerLoginCallbackHandler` on Kafka clients 4.x | Use `org.apache.kafka.common.security.oauthbearer.OAuthBearerLoginCallbackHandler`, and allow-list the token URL with `-Dorg.apache.kafka.sasl.oauthbearer.allowed.urls` |
+| A comment at the end of a line in a `.properties` file | Java properties keep the comment as part of the value; put comments on their own line |
+| `conduktor get topics` | `conduktor get Topic --cluster <cluster>`: singular kind, `--cluster` required |

@@ -4,7 +4,7 @@
 
 **Console** -- `conduktor/conduktor-console`, port 8080, requires PostgreSQL.
 Provides: RBAC, topic catalog, monitoring, self-service framework, data quality UI.
-Console resources: `apiVersion: v2` (or `apiVersion: kafka/v2` for Topics).
+Console resources: the version number must match the kind (`v2` for Topic, Group, User, KafkaCluster, KafkaConnectCluster; `v1` for self-service kinds, ServiceAccount and data quality). Prefixes such as `kafka/`, `iam/`, `console/` or `self-serve/` are conventions: the CLI and Console ignore them.
 
 **Gateway** -- `conduktor/conduktor-gateway`, port 6969.
 Transparent Kafka proxy. Handles: interceptors, virtual clusters, encryption, masking, traffic control.
@@ -17,7 +17,7 @@ Console and Gateway are **separate services**. Console can manage Gateway resour
 
 ## 2. Gateway resource model
 
-All Gateway resources: `apiVersion: gateway/v2`. 6 resource kinds:
+All Gateway resources: `apiVersion: gateway/v2`. 6 resource kinds, plus `TopicView` (GA in 3.20):
 
 | Kind | Purpose |
 |---|---|
@@ -66,7 +66,7 @@ spec:
 ### GatewayServiceAccount
 
 - `EXTERNAL`: `spec.externalNames` required, non-empty list (currently max 1), unique across all GatewayServiceAccounts.
-- `LOCAL`: enables `/gateway/v2/tokens` endpoint for credential generation with configurable TTL.
+- `LOCAL`: credentials come from `POST /gateway/v2/token` (singular) with a mandatory TTL, or `conduktor run generateServiceAccountToken --v-cluster <vc> --username <sa> --life-time-seconds <n>`.
 - Stored in internal topic `_conduktor_${GATEWAY_CLUSTER_ID}_usermappings`.
 - `metadata.name` = friendly name (used in Interceptor scopes, ACLs, audit logs). `spec.externalNames` = provider identity (mapping only).
 
@@ -109,7 +109,7 @@ Maps a physical topic into a vCluster: `metadata: { name: alias, vCluster: vc }`
 
 ### ConcentrationRule
 
-Routes virtual topic creation into shared physical topics based on `cleanup.policy`. `autoManaged: true` = auto-create physical topics. `offsetCorrectness: true` = proper lag tracking. Spec changes do NOT affect previously created concentrated topics.
+Routes virtual topic creation into shared physical topics based on `cleanup.policy`. `autoManaged: true` = auto-create physical topics. `offsetCorrectness` is deprecated since 3.21 (removal planned in 3.24): leave it `false`. Spec changes do NOT affect previously created concentrated topics.
 
 ```yaml
 apiVersion: gateway/v2
@@ -159,12 +159,12 @@ spec:
 
 | SA Type | Auth mode | Token endpoint |
 |---|---|---|
-| `LOCAL` | Gateway-managed only (SASL) | `/gateway/v2/tokens` |
+| `LOCAL` | Gateway-managed only (SASL) | `/gateway/v2/token` |
 | `EXTERNAL` | Gateway-managed (mTLS/OAuth) or Kafka-managed | N/A |
 
 | Security Mode | Virtual Clusters | Local SA | External SA |
 |---|---|---|---|
-| `GATEWAY_MANAGED` | Yes | Yes (SASL only) | Yes (mTLS or OAuth) |
+| `GATEWAY_MANAGED` | Yes (needs a SASL or mTLS listener) | Yes (SASL only) | Yes (mTLS or OAuth) |
 | `KAFKA_MANAGED` | No | No | Yes |
 
 Set via `GATEWAY_SECURITY_MODE` env var. Authentication methods: SASL (PLAIN, SCRAM, OAUTHBEARER), mTLS, anonymous.
@@ -193,7 +193,7 @@ metadata:
   name: "clickstream-app"
 spec:
   title: "Clickstream App"
-  owner: "groupA"            # Console Group technical-id
+  owner: "clickstream-owners"   # Console Group name: lowercase, [0-9a-z_.-] only
 ```
 
 ### ApplicationInstance
@@ -226,7 +226,12 @@ spec:
 
 ### ResourcePolicy
 
-CEL-expression-based policy enforcement. Replaces the legacy TopicPolicy. `spec.targetKind`: `Topic`, `Connector`, `Subject`, or `ApplicationGroup`. Linked via `spec.policyRef` on ApplicationInstance. Rules use `condition` (CEL expr) + `errorMessage`.
+CEL-expression-based policy enforcement. Replaces the legacy TopicPolicy. `spec.targetKind`: `Topic`, `Connector`, `Subject`, `ApplicationGroup` or (1.47+) `ApplicationInstancePermission`. Where to link it depends on the kind:
+- Topic, Connector and Subject policies: the ApplicationInstance `spec.policyRef`, which accepts only these three kinds.
+- ApplicationGroup policies: the Application `spec.policyRef`.
+- ApplicationInstancePermission policies: the KafkaCluster `spec.policiesRef`.
+
+A cluster referencing a policy in `policiesRef` needs that policy to exist first. Rules use `condition` (CEL expr) + `errorMessage`.
 
 ```yaml
 apiVersion: self-serve/v1
@@ -251,7 +256,7 @@ CEL tips: use `int(string(...))` for config values, bracket notation for dotted/
 
 ### TopicPolicy (deprecated — do not use)
 
-Legacy constraint-based policy for topics only. Replaced by ResourcePolicy. Do not run `conduktor get TopicPolicy` or generate TopicPolicy YAML — always use ResourcePolicy instead. Both `topicPolicyRef` and `policyRef` can coexist on ApplicationInstance during migration, but new configs should only use `policyRef`.
+Legacy constraint-based policy for topics only, replaced by ResourcePolicy. Since Console 1.47, creating or updating a TopicPolicy is refused, so never generate TopicPolicy YAML. Use `conduktor get TopicPolicy` only to list what to migrate. Existing ones keep applying through `topicPolicyRef` until migrated; new configs use `policyRef`.
 
 ### ApplicationGroup
 
@@ -268,7 +273,7 @@ spec:
   description: "Read access to clickstream resources"
   members: []                          # required even if empty
   externalGroups:
-    - clickstream-developers           # Console Group technical-id
+    - clickstream-developers           # IdP group name (SSO/LDAP groups claim)
   permissions:
     - appInstance: "clickstream-dev"
       resourceType: TOPIC
@@ -278,7 +283,7 @@ spec:
 ```
 
 - `spec.members`: list of user emails for direct membership. Required field — use `[]` if relying solely on `externalGroups`.
-- `spec.externalGroups`: list of Console Group technical-ids. Members of these groups inherit the ApplicationGroup's permissions.
+- `spec.externalGroups`: list of identity-provider group names (LDAP/OIDC groups claim), synchronized at login. Users in those IdP groups inherit the ApplicationGroup's permissions. Local members of a Console Group inherit nothing, unless its name happens to match the IdP group (the template's convention).
 - `spec.permissions`: list of permission entries, each scoped to an `appInstance` and `resourceType`.
 
 ### ApplicationInstancePermission
@@ -290,7 +295,7 @@ apiVersion: self-serve/v1
 kind: ApplicationInstancePermission
 metadata:
   application: "clickstream-app"
-  appInstance: "clickstream-app-dev"
+  appInstance: "clickstream-dev"
   name: "perm-to-another"
 spec:
   resource: { type: TOPIC, name: "click.event-stream.avro", patternType: LITERAL }
@@ -301,8 +306,7 @@ spec:
 
 ## 5. Console resource model
 
-Console resources: `apiVersion: v2` (Topics: `apiVersion: kafka/v2`).
-Key kinds: `Topic`, `Group`, `User`, `KafkaCluster`, `KafkaConnect`, `ServiceAccount`.
+Key kinds and versions: `Topic`, `Subject`, `Connector`, `Group`, `User`, `KafkaCluster`, `KafkaConnectCluster` (v2); `ServiceAccount` (v1, Kafka ACLs of a principal on a cluster). Only the version number matters: `kafka/v2` and `v2` are equivalent. Never rewrite the string on resources managed with CLI state (see [guardrails.md](guardrails.md) §3).
 
 ```yaml
 apiVersion: kafka/v2

@@ -2,13 +2,12 @@
 
 ## Agent workflow
 
-1. Run `conduktor get Interceptor --gateway -o yaml` to check existing data quality interceptors
+1. Check the plan first ([guardrails](../../references/guardrails.md) §1). DataQualityPolicy needs the Trust license: on Community Edition the limit is 0 policies. Then run `conduktor get DataQualityRule -o yaml` and `conduktor get DataQualityPolicy -o yaml` to see what exists (built-in rules `enforce_avro` and `enforce_schema_id` are always there)
 2. Ask what to enforce: field validation (CEL), schema compliance (JSON Schema/Avro), or header rules
-3. Ask which topics to protect and what action on violation (BLOCK the message or MARK with a header)
-4. Run `conduktor get VirtualCluster -o name` to get available scopes
-5. Generate the complete `Interceptor` YAML with the correct `pluginClass` and validation rules
-6. Show the YAML and offer to run `conduktor apply -f --dry-run`
-7. On approval, run `conduktor apply -f`
+3. Ask which topics to protect and what action on violation (BLOCK the message or MARK with a header). Block and mark only work on a Gateway cluster registered in Console
+4. Generate the `DataQualityRule` YAML(s), then a `DataQualityPolicy` whose `metadata.group` holds `topicDataQualityManage` on the targets (group permissions need a paid plan)
+5. Show the YAML and run `conduktor apply -f <file> --dry-run`
+6. On approval, run `conduktor apply -f <file>`. Console deploys the Gateway interceptor itself; don't hand-write one unless the user has no Console
 
 ## When to use this
 
@@ -104,7 +103,7 @@ spec:
 
 Only supports Confluent and Confluent-like (e.g. Redpanda) schema registries.
 
-Built-in rules are created in Console UI (not via YAML). Attach them to a Policy like any other rule.
+Built-in rules already exist in every Console: `enforce_avro` (EnforceAvro) and `enforce_schema_id` (EnforceSchemaId). You can't create them, but you reference them by name in a Policy's `spec.rules`, like any other rule.
 
 ## Creating a policy (YAML)
 
@@ -176,10 +175,10 @@ For teams not using Console-managed data quality, Gateway provides equivalent in
 
 | Plugin class | Purpose |
 |---|---|
-| `io.conduktor.gateway.interceptor.safeguard.DataQualityProducerPlugin` | CEL-based validation at produce time |
+| `io.conduktor.gateway.interceptor.safeguard.DataQualityProducerPlugin` | SQL-based validation at produce time (`statement: SELECT … WHERE …`), not CEL |
 | `io.conduktor.gateway.interceptor.safeguard.SchemaPayloadValidationPolicyPlugin` | Schema-based payload validation |
 
-These are raw Gateway interceptors (`apiVersion: gateway/v2`, `kind: Interceptor`) configured with `spec.pluginClass`. Use Console-managed `DataQualityRule`/`DataQualityPolicy` instead when possible -- they provide UI, violation history, metrics, and alerting.
+These are raw Gateway interceptors (`apiVersion: gateway/v2`, `kind: Interceptor`) configured with `spec.pluginClass`. The CEL/JSON Schema engine is `io.conduktor.gateway.interceptor.dataquality.DataQualityPlugin`, which Console deploys for each DataQualityPolicy. Use Console-managed `DataQualityRule`/`DataQualityPolicy` instead when possible -- they provide UI, violation history, metrics, and alerting.
 
 ## Common mistakes
 
@@ -192,3 +191,6 @@ These are raw Gateway interceptors (`apiVersion: gateway/v2`, `kind: Interceptor
 | Dot notation for headers with dashes | Use bracket notation: `headers['Content-Type']`. |
 | Expecting Avro type fidelity in CEL | CEL sees JSON-converted payload only. Avro type info is lost. |
 | Omitting `$schema` and expecting draft-07 behavior | Defaults to draft 2020-12. Specify `$schema` explicitly if you need an older draft. |
+| Block or mark on a non-Gateway cluster | Rejected (`is not a gateway, cannot use blocking or mark action`). Target the Gateway cluster registered in Console. |
+| `metadata.group` without `topicDataQualityManage` on the targets | Rejected (`missing KafkaTopicsDataQualityManage`). Grant it to the group first; group permissions need a paid plan. |
+| Creating a policy on Community Edition | `Your license allows you to create a maximum of 0 data quality policy`: it needs the Trust license. |

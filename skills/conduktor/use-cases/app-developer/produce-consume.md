@@ -2,11 +2,11 @@
 
 ## Agent workflow
 
-1. Run `conduktor get Topic -o name` to list topics the user can access
+1. Run `conduktor get Topic --cluster <cluster> -o name` to list topics the user can access
 2. Ask which topic to produce to or consume from, and what language (Java, Python, Node.js)
-3. Run `conduktor get ApplicationInstance -o yaml` to get the Gateway bootstrap server and service account credentials
+3. Get the Gateway bootstrap address and the client credentials from the user or the platform team. `conduktor get ApplicationInstance <name> -o yaml` only gives the cluster ID and the service account name, not the bootstrap address or any secret.
 4. Generate a complete, runnable producer or consumer code snippet with real connection details
-5. If the user needs schema registry, include the proxied schema registry URL in the config
+5. If the user needs a schema registry, use the real Schema Registry URL and its own credentials. Gateway does not proxy Schema Registry.
 6. If the topic is not in the user's namespace, suggest requesting access (see `request-access.md`)
 
 ## When to use this
@@ -61,7 +61,9 @@ props.put("sasl.jaas.config",
     "org.apache.kafka.common.security.oauthbearer.OAuthBearerLoginModule required "
     + "clientId='my-client-id' clientSecret='my-secret' scope='kafka';");
 props.put("sasl.login.callback.handler.class",
-    "org.apache.kafka.common.security.oauthbearer.secured.OAuthBearerLoginCallbackHandler");
+    "org.apache.kafka.common.security.oauthbearer.OAuthBearerLoginCallbackHandler");
+// Kafka clients 4.x: also start the JVM with
+// -Dorg.apache.kafka.sasl.oauthbearer.allowed.urls=https://idp.company.org/oauth2/token
 props.put("sasl.oauthbearer.token.endpoint.url", "https://idp.company.org/oauth2/token");
 ```
 
@@ -113,8 +115,7 @@ await consumer.run({ eachMessage: async ({ message }) => console.log(message.val
 
 ## Schema Registry
 
-If your platform team has configured a Schema Registry behind Gateway, point your schema registry URL to Gateway as well.
-Use the same credentials. Gateway proxies Schema Registry requests and applies interceptors (validation, compatibility) transparently.
+Gateway proxies the Kafka protocol only, not Schema Registry HTTP calls. Point `schema.registry.url` at your real Schema Registry, with its own credentials. Some platforms also run Conduktor's separate Schema Registry Proxy; ask your platform team for its URL. Interceptors that read schemas (encryption, validation) fetch them from the registry configured on the Gateway side.
 
 ## Virtual cluster isolation
 
@@ -133,11 +134,11 @@ Gateway interceptors process your traffic in-flight. These are configured by the
 
 ### Encryption/decryption
 
-If field-level encryption is configured (via `EncryptPlugin` or `EncryptSchemaBasedPlugin`), Gateway encrypts designated fields on produce and decrypts them on consume (via `DecryptPlugin`) -- provided your service account has the decrypt permission. Your application sends and receives plaintext.
+If field-level encryption is configured (via `EncryptPlugin` or `EncryptSchemaBasedPlugin`), Gateway encrypts designated fields on produce and decrypts them on consume (via `DecryptPlugin`), for the service accounts, groups or virtual clusters the DecryptPlugin is scoped to. Your application sends and receives plaintext.
 
 ### Data masking
 
-If `FieldLevelDataMaskingPlugin` is active, consumers without decrypt permission receive masked values for sensitive fields. This is applied at the Gateway level on consume. Your consumer code sees masked data with no indication that masking occurred -- the message structure stays the same.
+If `FieldLevelDataMaskingPlugin` is active and scoped to your service account, group or virtual cluster, you receive masked values for sensitive fields. This is applied at the Gateway level on consume. Your consumer code sees masked data with no indication that masking occurred -- the message structure stays the same.
 
 ### Schema validation
 
@@ -148,9 +149,10 @@ If a schema validation interceptor is active (e.g., `SchemaPayloadValidationPoli
 | Mistake | Fix |
 |---|---|
 | Connecting to `kafka:9092` instead of `gateway:6969` | Update `bootstrap.servers` to the Gateway endpoint |
-| Using SCRAM or other mechanism when Gateway expects PLAIN | Use `SASL_PLAINTEXT` + `PLAIN` for local service accounts |
+| Using SCRAM with a local service account | Local service accounts use `PLAIN` with a Gateway token, unless the platform runs Gateway 3.21+ with `GATEWAY_FEATURE_FLAGS_SERVICE_ACCOUNTS=true` and issued SCRAM credentials |
 | Consumer group name outside your ownership prefix | Use the prefix from your ApplicationInstance resources (e.g., `click.`) |
 | Topic name outside your namespace | You can only produce/consume topics owned by or shared with your ApplicationInstance |
 | Producer rejected with schema error | Your payload does not conform to the registered schema -- check the Schema Registry |
-| Seeing masked/encrypted data | Your service account lacks decrypt permission -- ask your platform team |
-| TLS errors with OAUTHBEARER | External OIDC requires `SASL_SSL`, not `SASL_PLAINTEXT` |
+| Seeing masked/encrypted data | Your service account isn't in the DecryptPlugin scope, or is in a masking scope -- ask your platform team |
+| `ClassNotFoundException` for `...oauthbearer.secured.OAuthBearerLoginCallbackHandler` | Kafka clients 4.x removed it: use `...oauthbearer.OAuthBearerLoginCallbackHandler` and set `org.apache.kafka.sasl.oauthbearer.allowed.urls` |
+| Pointing `schema.registry.url` at Gateway | Gateway doesn't proxy Schema Registry; use the registry's own URL |

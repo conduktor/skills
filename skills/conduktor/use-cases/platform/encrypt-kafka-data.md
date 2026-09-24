@@ -2,17 +2,17 @@
 
 ## Agent workflow
 
-1. Run `conduktor get Interceptor --gateway -o yaml` to check existing encryption interceptors
+1. Run `conduktor get Interceptor -o yaml` to check existing encryption interceptors (needs `CDK_GATEWAY_BASE_URL/USER/PASSWORD`; there is no `--gateway` flag on a single kind)
 2. Ask what to encrypt: specific fields (field-level) or entire payload
 3. Ask which KMS provider (Vault, AWS KMS, Azure, GCP, or in-memory for dev)
 4. Ask which topics and whether to scope by virtual cluster, service account, or group
 5. Run `conduktor get VirtualCluster -o name` and `conduktor get GatewayServiceAccount -o name` to get real scope targets
-6. Generate the complete `Interceptor` YAML with correct `pluginClass`, KMS config, and scope targeting
+6. Generate the complete `Interceptor` YAML with correct `pluginClass`, KMS config, and scope targeting. Write secrets as `$${VAULT_TOKEN}`: the CLI would substitute `${VAULT_TOKEN}` itself and store the token in clear ([guardrails](../../references/guardrails.md) §4)
 7. Generate the matching `DecryptPlugin` interceptor for consumers
-8. Show both YAMLs and offer to run `conduktor apply -f --dry-run`
-9. On approval, run `conduktor apply -f`
+8. Show both YAMLs and run `conduktor apply -f <file> --dry-run`. For Interceptors the dry-run does not validate the plugin class or its config; only the real apply does
+9. On approval, run `conduktor apply -f <file>`
 
-Gateway encrypts data as it passes through the proxy, before it reaches the broker. Unlike TLS, data stays encrypted at rest on Kafka brokers. Requires Conduktor Shield license.
+Gateway encrypts data as it passes through the proxy, before it reaches the broker. Unlike TLS, data stays encrypted at rest on Kafka brokers. Requires the Conduktor Shield license feature (Gateway 3.19+ answers 403 on apply without it).
 
 ## When to use this
 
@@ -20,7 +20,7 @@ Gateway encrypts data as it passes through the proxy, before it reaches the brok
 - Full payload encryption when the entire message is sensitive.
 - Field-level encryption when only specific fields need protection (Avro, Protobuf, JSON).
 - Crypto shredding: use mustache-templated `keySecretId` so deleting the key makes data unrecoverable.
-- Encrypt on produce (recommended) or on consume (deprecated since Gateway v3.16.0).
+- Encrypt on produce. The on-consume plugins (`FetchEncryptPlugin`, `FetchEncryptSchemaBasedPlugin`) were removed in Gateway 3.19.
 
 ## How it works (envelope encryption)
 
@@ -58,8 +58,7 @@ spec:
     kmsConfig:
       vault:
         uri: http://vault:8200
-        token: ${VAULT_TOKEN}
-        version: 1
+        token: $${VAULT_TOKEN}
     recordValue:
       payload:
         keySecretId: vault-kms://vault:8200/transit/keys/full-payload-key
@@ -85,8 +84,7 @@ spec:
     kmsConfig:
       vault:
         uri: http://vault:8200
-        token: ${VAULT_TOKEN}
-        version: 1
+        token: $${VAULT_TOKEN}
     recordValue:
       fields:
         - fieldName: password
@@ -116,8 +114,7 @@ spec:
     kmsConfig:
       vault:
         uri: http://vault:8200
-        token: ${VAULT_TOKEN}
-        version: 1
+        token: $${VAULT_TOKEN}
     defaultKeySecretId: vault-kms://vault:8200/transit/keys/default-key
     defaultAlgorithm: AES128_GCM
     tags:
@@ -146,10 +143,10 @@ Configure the connection in `kmsConfig` under `spec.config`. Multiple KMS provid
 
 Pick the plugin class based on your mode:
 
-| Mode | On produce | On consume (deprecated) |
-|------|-----------|------------------------|
-| List-based | `io.conduktor.gateway.interceptor.EncryptPlugin` | `io.conduktor.gateway.interceptor.FetchEncryptPlugin` |
-| Schema-based | `io.conduktor.gateway.interceptor.EncryptSchemaBasedPlugin` | `io.conduktor.gateway.interceptor.FetchEncryptSchemaBasedPlugin` |
+| Mode | Plugin class (encrypts on produce) |
+|------|-----------|
+| List-based | `io.conduktor.gateway.interceptor.EncryptPlugin` |
+| Schema-based | `io.conduktor.gateway.interceptor.EncryptSchemaBasedPlugin` |
 
 ### 3. Create decryption interceptor
 
@@ -171,8 +168,7 @@ spec:
     kmsConfig:
       vault:
         uri: http://vault:8200
-        token: ${VAULT_TOKEN}
-        version: 1
+        token: $${VAULT_TOKEN}
 ```
 
 Decrypt specific fields only:
@@ -182,7 +178,7 @@ config:
   kmsConfig:
     vault:
       uri: http://vault:8200
-      token: ${VAULT_TOKEN}
+      token: $${VAULT_TOKEN}
   recordValueFields:
     - password
     - address.zipCode
@@ -204,9 +200,9 @@ conduktor apply -f decrypt-interceptor.yaml
 | Key | Type | Default | Notes |
 |-----|------|---------|-------|
 | `topic` | String | `.*` | Regex for topic matching |
-| `schemaRegistryConfig.host` | String | | Required for Avro/JSON/Protobuf |
+| `schemaRegistryConfig.host` | String | | Required for Avro, JSON Schema and Protobuf (not for schemaless JSON) |
 | `kmsConfig` | Object | | One or multiple KMS connections |
-| `schemaDataMode` | String | `preserve_avro` | `preserve_avro` or `convert_json` |
+| `schemaDataMode` | String | `preserve_avro` | `preserve_avro`; `convert_json` is deprecated since 3.21 (removal in 3.24) |
 | `compressionType` | Enum | `none` | `none`, `gzip`, `snappy`, `lz4`, `zstd` (full payload only) |
 | `errorPolicy` | String | `fail_on_encrypted` | `fail_on_encrypted` or `skip_already_encrypted` |
 
@@ -251,7 +247,7 @@ Useful for crypto shredding: one key per user, delete the key to make their data
 - **Using `in-memory-kms://` in production**: keys are lost on Gateway restart. Use Vault, AWS, Azure, or GCP.
 - **Encrypt and decrypt on different KMS**: the decrypt interceptor must reach the same KMS that encrypted the data.
 - **Forgetting `kmsConfig` in the decrypt interceptor**: DecryptPlugin also needs KMS access to decrypt the EDEK.
-- **Using `FetchEncryptPlugin`/`FetchEncryptSchemaBasedPlugin` for new setups**: on-consume encryption is deprecated since v3.16.0. Use on-produce plugins.
+- **Using `FetchEncryptPlugin`/`FetchEncryptSchemaBasedPlugin`**: removed in Gateway 3.19, so configs that use them fail to load. Use the on-produce plugins.
 - **Mustache template referencing encrypted field**: if `fieldName: email` and `keySecretId` uses `{{record.value.email}}`, decryption becomes impossible. The templated field must not be in the encrypted field list.
 - **AES-GCM on high-throughput topics without rotation**: a single DEK can safely encrypt ~4 billion messages with AES-GCM. Beyond that, switch algorithm or rotate keys.
-- **Environment variable syntax in YAML**: use `${VAR}` for values Gateway resolves at startup. Do not confuse with mustache `{{...}}` which resolves per record.
+- **Environment variable syntax in YAML**: the `conduktor` CLI substitutes `${VAR}` on your machine before sending, so the secret is stored in clear in the Interceptor, and the apply fails if `VAR` isn't set locally. Write `$${VAR}` so that Gateway resolves it from its own environment. Do not confuse either with mustache `{{...}}`, which resolves per record.
