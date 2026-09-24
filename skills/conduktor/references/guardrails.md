@@ -34,16 +34,22 @@ Changes that trigger delete + recreate on a state-managed resource:
 - rewriting `apiVersion`, even `kafka/v2` → `v2`, the same version
 
 Before applying any change to an existing resource under state:
-1. Run the exact apply the pipeline runs (same files or folder, same state via `--state-file` or `CDK_STATE_REMOTE_URI`), with `--dry-run` added. If you dry-run fewer files than the state tracks, everything else also shows up as `Deleted (dry-run)`.
+1. Run the exact apply the pipeline runs (same files or folder, same state via `--state-file` or `CDK_STATE_REMOTE_URI`), with `--dry-run` added. A state location alone doesn't turn state on: keep `--enable-state` (or `CDK_STATE_ENABLED=true`), or the dry-run checks no deletion at all. Stderr prints `Loading state from …` when state is on. If you dry-run fewer files than the state tracks, everything else also shows up as `Deleted (dry-run)`.
 2. If the output contains `Deleted (dry-run)` for a resource that is still in your files, stop. Do not apply. Tell the user this change will delete and recreate the resource, then offer:
    (a) drop the metadata or apiVersion change;
    (b) accept delete + recreate, only if the topic is empty or disposable;
-   (c) have the platform team update the state entry by hand before the next stateful apply.
+   (c) keep the data: in one commit, make the change and point every job at a new, unused state location, as in the handover steps below. Editing the state entry by hand also works, but only with the pipeline paused until the change is merged: a run in between deletes the topic.
 
 Also:
 - Never rewrite `apiVersion` prefixes in a repo that uses state. Only the version number matters to the CLI and Console, so there is nothing to fix.
 - Use one state location per complete resource set. Applying a subset of files against a shared state deletes everything else it tracks.
 - PR pipelines must dry-run with the same state and remote URI, otherwise the PR won't show the deletions the merge will do.
+
+To hand resources over to Terraform, the UI or another repo:
+- Deleting their YAML deletes them on the next stateful apply, and `conduktor delete` deletes them too. The CLI has no command that only stops tracking a resource.
+- Preferred: in one commit, delete the YAML and point every job that uses the state (apply and PR dry-run) at a new, unused state location. Nothing needs creating there: the CLI starts from an empty state, which deletes nothing on its first run, so keep other removals out of that commit. After that first run, move the old `cli-state.json` aside so no job can load it again.
+- To keep the same location instead: pause the pipeline (e.g. disable the workflow), back up the state file, remove the resources' entries from it, merge the YAML deletion, and resume only after a stateful dry-run of main shows no `Deleted (dry-run)`. Any run between the state edit and the merge adds the entries back.
+- The state file is JSON: a `resources` array of entries like `{"apiVersion": "kafka/v2", "kind": "Topic", "metadata": {"cluster": "prod", "name": "my-topic"}}`, matching each YAML's exact `apiVersion`, `kind` and `metadata`. Remotely it is `cli-state.json` under the URI prefix (`s3://state-bucket/conduktor/prod/?region=us-east-1` → `s3://state-bucket/conduktor/prod/cli-state.json`), unless the URI already ends in `.json`.
 
 ## 4. Secrets and `${VAR}` in YAML
 

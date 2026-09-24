@@ -84,15 +84,7 @@ provider "conduktor" {
   admin_password = var.gateway_admin_password
 }
 
-resource "conduktor_console_user_v2" "bob" {
-  provider = conduktor.console
-  # ...
-}
-
-resource "conduktor_gateway_service_account_v2" "sa" {
-  provider = conduktor.gateway
-  # ...
-}
+# then set provider = conduktor.console or conduktor.gateway on each resource
 ```
 
 ## Console resources (with working HCL)
@@ -286,7 +278,7 @@ resource "conduktor_generic" "alice" {
 
 ## Adopting existing resources
 
-Resources that already exist must be imported before the first `apply`. Otherwise `apply` silently overwrites them with the HCL, and a later `destroy` deletes them from production.
+Resources that already exist must be imported before the first `apply`. Otherwise `apply` silently overwrites them with the HCL, and a later `destroy` deletes them from production. If a stateful `conduktor apply` pipeline manages them today, deleting their YAML from that repo deletes them: hand them over as described in [guardrails](../../references/guardrails.md) §3.
 
 ```hcl
 import {
@@ -324,6 +316,7 @@ All names take the `conduktor_` prefix. The self-service resources fail without 
 |---|---|
 | `version = "~> 0.1"` | It resolves to 0.5.0 and excludes every 1.x release. Use `~> 1.5` |
 | Applying HCL for resources that already exist | Import them first (`import {}` blocks); otherwise `apply` overwrites them and `destroy` later deletes them |
+| Deleting the YAML of imported resources from a stateful `conduktor apply` repo | Its next run deletes them. Hand them over first ([guardrails](../../references/guardrails.md) §3) |
 | Changing a topic's `partitions`, `replication_factor`, `name` or `cluster` | Forces destroy + create, with data loss. Use `prevent_destroy`; add partitions outside Terraform (`conduktor run topicAddPartitions`) |
 | Missing `mode` | Required in HCL, not settable by env var: `mode = "console"` or `mode = "gateway"` |
 | Using `api_token` with Gateway mode | Gateway only supports `admin_user`/`admin_password`; `api_token` is ignored |

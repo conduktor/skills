@@ -175,15 +175,7 @@ The CLI replaces `${VAR}` and `${VAR:-default}` in files before sending. It fail
 
 ### Enable
 
-Disabled by default. Activate per-command or globally:
-
-```bash
-# flag
-conduktor apply -f res.yaml --enable-state
-
-# env var
-export CDK_STATE_ENABLED=true
-```
+Disabled by default. Enable it per command with `--enable-state`, or globally with `CDK_STATE_ENABLED=true`.
 
 ### Local state
 
@@ -214,9 +206,10 @@ Or set `CDK_STATE_REMOTE_URI` globally. Authentication uses standard provider me
 
 When state is enabled, `apply` compares the resource list in the YAML files against the stored state. Resources present in state but absent from files are treated as orphans and deleted automatically, before anything is applied. This is how the CLI achieves declarative convergence.
 
-Two consequences that delete data:
+Three consequences that delete data:
 - A resource's identity in state is its exact `apiVersion` string, `kind` and `metadata` (label values excepted). Editing a topic's `description` or `catalogVisibility`, adding a `labels` block, or rewriting `kafka/v2` as `v2` makes the CLI delete the topic, then recreate it empty. The exit code is still 0. Always dry-run with the same state first and stop on `Deleted (dry-run)` ([guardrails](../../references/guardrails.md) §3).
 - The state covers everything applied through its location. Applying only some of the files against a shared state deletes the others. Use one state location per complete resource set.
+- Deleting a YAML file deletes its resources on the next run, even when you only meant to hand them over to Terraform or the UI. See [guardrails](../../references/guardrails.md) §3 for a safe handover.
 
 ## CI/CD patterns
 
@@ -272,14 +265,19 @@ Run on pull requests, with the same state as the main job, so the PR shows what 
     CDK_API_KEY: ${{ secrets.CDK_API_KEY }}
     CDK_STATE_REMOTE_URI: "s3://state-bucket/conduktor/prod/?region=us-east-1"
   run: |
-    conduktor apply -f conduktor/ --recursive --enable-state --dry-run | tee dry-run.txt
+    set -o pipefail
+    conduktor apply -f conduktor/ --recursive --enable-state --dry-run 2>&1 | tee dry-run.txt
+    if ! grep -q 'Loading state from remote storage' dry-run.txt; then
+      echo "::error::The dry-run did not read the shared state. Check CDK_STATE_REMOTE_URI and the bucket credentials."
+      exit 1
+    fi
     if grep -q 'Deleted (dry-run)' dry-run.txt; then
       echo "::error::This PR deletes resources (or makes the CLI delete and recreate them). Review dry-run.txt."
       exit 1
     fi
 ```
 
-A dry-run doesn't write the state. `--print-diff` fails for resources that don't exist yet, so keep it out of PR jobs.
+The PR job needs the same bucket credentials as the apply job. Without them, the CLI either fails to load the state (and `| tee` hides the exit code unless `pipefail` is set) or silently falls back to an empty local state, and the dry-run then shows no deletions. The first `grep` catches both. A dry-run doesn't write the state. `--print-diff` fails for resources that don't exist yet, so keep it out of PR jobs.
 
 ## Common mistakes
 
@@ -287,6 +285,7 @@ A dry-run doesn't write the state. `--print-diff` fails for resources that don't
 |---------|-----|
 | Forgetting `--enable-state` -- orphans never cleaned | Set `CDK_STATE_ENABLED=true` globally in CI env |
 | Editing metadata or `apiVersion` of resources already in state | The CLI deletes and recreates them (topics lose their data). Dry-run with state and stop on `Deleted (dry-run)` |
+| Deleting YAML to hand resources over to Terraform or the UI | The next stateful apply deletes them. Switch to a new state location in the same commit, or edit the state with the pipeline paused ([guardrails](../../references/guardrails.md) §3) |
 | Several jobs applying different file sets against one state location | Each run deletes what the other applied. Use one state location per complete resource set; serializing jobs doesn't help |
 | Using `--state-file` in CI instead of remote backend | Use `--state-remote-uri`; local files are lost between runs |
 | Missing `-r` when resources live in subdirectories | Always pass `--recursive` with folder paths |
