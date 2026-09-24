@@ -3,12 +3,12 @@
 ## Agent workflow
 
 1. Check if there are existing `.tf` files in the workspace
-2. Ask what to manage: Console resources, Gateway resources, or both
-3. If no provider config exists, generate the `conduktor` provider block with the correct `mode` and auth env vars
-4. Run `conduktor get all --console -o yaml` or `conduktor get all --gateway -o yaml` to discover existing resources
-5. Generate `conduktor_*` resource blocks in HCL matching the discovered resources
+2. Ask what to manage: Console resources, Gateway resources, or both. Self-service resources need an Enterprise Console license ([guardrails](../../references/guardrails.md) §1)
+3. If no provider config exists, generate the `conduktor` provider block (`version = "~> 1.5"`) with the correct `mode` and auth env vars
+4. Discover existing resources: `conduktor get all --console -o yaml` / `--gateway -o yaml` (root kinds only), plus `conduktor get Topic --cluster <id> -o yaml` for each cluster
+5. Generate `conduktor_*` resource blocks in HCL matching the discovered resources, **plus an `import {}` block for each one that already exists** ([Adopting existing resources](#adopting-existing-resources)), and `lifecycle { prevent_destroy = true }` on topics
 6. If managing both Console and Gateway, generate provider aliases
-7. Offer to run `terraform init` then `terraform plan`
+7. Offer to run `terraform init` then `terraform plan`. Read the plan: existing resources must show as imported. Stop on any `must be replaced` or `destroy` of an existing resource
 8. On approval, offer `terraform apply`
 
 Manage Conduktor Console and Gateway resources declaratively using the official Terraform provider.
@@ -32,7 +32,7 @@ terraform {
   required_providers {
     conduktor = {
       source  = "conduktor/conduktor"
-      version = "~> 0.1"
+      version = "~> 1.5"   # "~> 0.1" would resolve to 0.5.0 and exclude every 1.x release
     }
   }
 }
@@ -84,15 +84,7 @@ provider "conduktor" {
   admin_password = var.gateway_admin_password
 }
 
-resource "conduktor_console_user_v2" "bob" {
-  provider = conduktor.console
-  # ...
-}
-
-resource "conduktor_gateway_service_account_v2" "sa" {
-  provider = conduktor.gateway
-  # ...
-}
+# then set provider = conduktor.console or conduktor.gateway on each resource
 ```
 
 ## Console resources (with working HCL)
@@ -221,13 +213,13 @@ resource "conduktor_console_application_instance_v1" "myapp_dev" {
 resource "conduktor_gateway_virtual_cluster_v2" "team_a" {
   name = "team-a"
   spec = {
-    acl_enabled = false
     type        = "Standard"
-    acl_mode    = "KAFKA_API"
-    super_users = ["user1"]
+    acl_enabled = false   # no acl_mode/super_users without ACLs
   }
 }
 ```
+
+`acl_mode` is immutable and forces a replacement: setting it later destroys and recreates the virtual cluster. Choose it when you first enable ACLs, with `acl_enabled = true` and either `acl_mode = "REST_API"` plus `acls`, or `acl_mode = "KAFKA_API"` plus `super_users`.
 
 ### Interceptor
 
@@ -284,50 +276,50 @@ resource "conduktor_generic" "alice" {
 }
 ```
 
+## Adopting existing resources
+
+Resources that already exist must be imported before the first `apply`. Otherwise `apply` silently overwrites them with the HCL, and a later `destroy` deletes them from production. If a stateful `conduktor apply` pipeline manages them today, deleting their YAML from that repo deletes them: hand them over as described in [guardrails](../../references/guardrails.md) §3.
+
+```hcl
+import {
+  to = conduktor_console_topic_v2.orders_events
+  id = "prod/orders.events"                 # <cluster>/<topic>
+}
+
+import {
+  to = conduktor_gateway_interceptor_v2.enforce_partition_limit
+  id = "enforce-partition-limit/passthrough//"   # <name>/<vcluster>/<group>/<username>; scope omitted = passthrough (check with: conduktor get Interceptor --name enforce-partition-limit -o yaml)
+}
+
+resource "conduktor_console_topic_v2" "orders_events" {
+  name    = "orders.events"
+  cluster = "prod"
+  spec = { partitions = 12, replication_factor = 3 }
+  lifecycle { prevent_destroy = true }   # partitions, replication_factor, name, cluster changes force a replacement
+}
+```
+
+Other import IDs are listed in each resource's Import section in the registry docs (most use the resource `name`).
+
 ## Full resource list
 
-**Console (16)**
+As of provider 1.5.1 (no resource was added since 1.0.0; there are no data sources):
+- **Console (16):** `console_user_v2`, `console_group_v2`, `console_kafka_cluster_v2`, `console_kafka_connect_v2`, `console_topic_v2`, `console_kafka_subject_v2`, `console_ksqldb_cluster_v2`, `console_connector_v2`, `console_service_account_v1` (Kafka ACLs of a principal on a cluster), `console_partner_zone_v2`, `console_resource_policy_v1` (Topic, Connector, Subject, ApplicationGroup), `console_application_v1`, `console_application_instance_v1`, `console_application_group_v1`, `console_application_instance_permission_v1`, `console_topic_policy_v1` (creation blocked since Console 1.47; the plan fails on Console > 1.46.2).
+- **Gateway (4):** `gateway_virtual_cluster_v2`, `gateway_interceptor_v2`, `gateway_service_account_v2`, `gateway_token_v2`.
+- **Generic (1):** `conduktor_generic`, experimental and Console-only. It covers the kinds known to the embedded CLI catalog (not Integration, GlueSchema or the templates).
 
-| Resource | Description |
-|----------|-------------|
-| `conduktor_console_user_v2` | Local or SSO user with RBAC permissions |
-| `conduktor_console_group_v2` | Group with members, external groups, permissions |
-| `conduktor_console_kafka_cluster_v2` | Kafka cluster connection |
-| `conduktor_console_topic_v2` | Topic with config, labels, description |
-| `conduktor_console_kafka_connect_v2` | Kafka Connect cluster connection |
-| `conduktor_console_kafka_subject_v2` | Schema Registry subject |
-| `conduktor_console_ksqldb_cluster_v2` | ksqlDB cluster connection |
-| `conduktor_console_service_account_v1` | Console service account |
-| `conduktor_console_connector_v2` | Kafka Connect connector |
-| `conduktor_console_topic_policy_v1` | Topic policy (deprecated, use resource_policy) |
-| `conduktor_console_resource_policy_v1` | CEL-based policy for Topic, Connector, Subject |
-| `conduktor_console_partner_zone_v2` | Partner zone for external access |
-| `conduktor_console_application_v1` | Application definition |
-| `conduktor_console_application_group_v1` | Application group |
-| `conduktor_console_application_instance_v1` | Application instance on a cluster |
-| `conduktor_console_application_instance_permission_v1` | Permissions for an app instance |
-
-**Gateway (4)**
-
-| Resource | Description |
-|----------|-------------|
-| `conduktor_gateway_virtual_cluster_v2` | Virtual cluster with ACL config |
-| `conduktor_gateway_interceptor_v2` | Interceptor plugin (encryption, header removal, policy, etc.) |
-| `conduktor_gateway_service_account_v2` | Gateway service account (LOCAL or EXTERNAL) |
-| `conduktor_gateway_token_v2` | Gateway authentication token |
-
-**Generic (1)**
-
-| Resource | Description |
-|----------|-------------|
-| `conduktor_generic` | Experimental YAML-based resource for any Console kind |
+All names take the `conduktor_` prefix. The self-service resources fail without an Enterprise Console license.
 
 ## Common mistakes
 
-1. **Missing `mode`** -- The provider will fail to initialize. Always set `mode = "console"` or `mode = "gateway"`.
-2. **Using `api_token` with Gateway mode** -- Gateway only supports `admin_user`/`admin_password`. The `api_token` field is ignored in gateway mode.
-3. **No alias when managing both Console and Gateway** -- You need two provider blocks with `alias` and must set `provider = conduktor.<alias>` on each resource.
-4. **Dirty plans with `conduktor_generic`** -- Always wrap YAML with `yamlencode(yamldecode(...))` to normalize whitespace. Raw strings cause perpetual diffs.
-5. **Referencing cluster by ID instead of name** -- `conduktor_console_topic_v2.cluster` expects the cluster resource name, not an internal ID.
-6. **Forgetting `required_providers`** -- Without the source declaration, Terraform cannot locate the provider on the registry.
-7. **Storing credentials in HCL** -- Use env vars or Terraform variables with `sensitive = true`. Never commit `api_token` or `admin_password` in plain text.
+| Mistake | Fix |
+|---|---|
+| `version = "~> 0.1"` | It resolves to 0.5.0 and excludes every 1.x release. Use `~> 1.5` |
+| Applying HCL for resources that already exist | Import them first (`import {}` blocks); otherwise `apply` overwrites them and `destroy` later deletes them |
+| Deleting the YAML of imported resources from a stateful `conduktor apply` repo | Its next run deletes them. Hand them over first ([guardrails](../../references/guardrails.md) §3) |
+| Changing a topic's `partitions`, `replication_factor`, `name` or `cluster` | Forces destroy + create, with data loss. Use `prevent_destroy`; add partitions outside Terraform (`conduktor run topicAddPartitions`) |
+| Missing `mode` | Required in HCL, not settable by env var: `mode = "console"` or `mode = "gateway"` |
+| Using `api_token` with Gateway mode | Gateway only supports `admin_user`/`admin_password`; `api_token` is ignored |
+| No alias when managing both Console and Gateway | Two provider blocks with `alias`, and `provider = conduktor.<alias>` on each resource |
+| Referencing a cluster by internal ID | `conduktor_console_topic_v2.cluster` expects the cluster name |
+| Storing credentials in HCL | Use env vars or `sensitive = true` variables. Kafka cluster `properties` (e.g. `sasl.jaas.config`) are not marked sensitive and appear in plans |

@@ -88,16 +88,16 @@ conduktor-self-service/
 - **Tenant** (multi-tenant apps) — `tenant-acme`, `tenant-globex`
 - **Cluster migration** — `legacy` vs `next-gen` during an upgrade
 
-Do not assume `dev/stag/prod`. Ask the user what dimensions matter to them.
+Do not assume `dev/stag/prod`. Ask the user what dimensions matter to them. The template's workflows only accept the instances listed in `VALID_INSTANCES` (`apply-apps.yml`: `dev stag prod`; `apply-clusters.yml`: `dev prod`). Any other instance name fails with `Unknown instance` until you add it to both lists.
 
 ## Token types
 
 | Token Type | Scope | Use in CI/CD |
 |---|---|---|
 | **AdminToken** | Full platform access | `apply-platform.yml` and `apply-clusters.yml` |
-| **ApplicationInstanceToken** | Scoped to a single ApplicationInstance | `apply-apps.yml` — one per app/instance |
+| **ApplicationInstanceToken** | Issued for one ApplicationInstance | `apply-apps.yml` — one per app/instance |
 
-**Do not use AdminTokens for application workflows.** ApplicationInstanceTokens enforce that a team can only modify resources within their own instance boundaries.
+**Do not use AdminTokens for application workflows.** An AdminToken can change anything on the platform. An ApplicationInstanceToken is limited to its own application's resources, so a leaked token exposes one application, not the platform.
 
 ## GitHub Environments
 
@@ -158,11 +158,16 @@ The three workflows in the template repo handle the three scopes:
 - **`apply-clusters.yml`** — triggered by changes under `platform/clusters/<instance>/`. Detects the changed instance from the diff, selects the matching `kafka-<instance>` GitHub Environment so cluster credential secrets resolve correctly, and applies with an AdminToken. Changes must be scoped to a single instance per PR.
 - **`apply-apps.yml`** — triggered by changes under `applications/<app>/<instance>/`. Detects the changed app/instance from the diff, selects the matching `<app>-<instance>` GitHub Environment for a scoped ApplicationInstanceToken. Changes must be scoped to a single app/instance per PR.
 
-**On pull request:** each workflow runs `conduktor apply --dry-run` against the live Console instance. Policy violations surface here before merge.
+**On pull request:** each workflow runs `conduktor apply -f <folder> -r --dry-run` against the live Console instance. Policy violations surface here before merge.
 
-**On push to main:** the workflow applies the resources. With `--enable-state`, resources removed from YAML are deleted from Conduktor on the next apply.
+**On push to main:** the workflow applies the resources with `--enable-state`. Resources removed from YAML are deleted from Conduktor on the next apply. So is any resource whose `apiVersion` string or metadata (description, `catalogVisibility`, a new `labels` block) changed: the CLI deletes it and recreates it, and a topic loses its data. Review PR dry-runs for `Deleted (dry-run)` lines ([guardrails](../../references/guardrails.md) §3).
 
 The exact YAML lives in the template — do not duplicate it in this skill or in a generated repo. If a customer needs a workflow tweak (e.g., self-hosted runner labels, additional pre-apply steps), edit the file from the template, do not regenerate from scratch.
+
+Known template issues to patch after cloning (as of 2026-09):
+- **CLI install step:** the three workflows download `releases/latest/download/conduktor-linux-amd64`, an asset that doesn't exist, and `curl -sL` doesn't fail on the 404. Replace it with `curl -sfL https://github.com/conduktor/ctl/releases/download/v0.9.2/conduktor-v0.9.2-linux-amd64.tar.gz | sudo tar xz -C /usr/local/bin conduktor`, or run the job in `container: conduktor/conduktor-ctl:v0.9.2`.
+- **`apply-platform.yml`:** it runs `conduktor apply -f platform/ -r`, which also loads `platform/clusters/**` and fails on their `${KAFKA_*}` variables. List the folders instead: `-f platform/policies -f platform/groups -f platform/applications -f platform/exceptions -r`.
+- **First apply:** clusters reference policies through `policiesRef`, so the policies must exist before the clusters are applied.
 
 ## Policy violations and exceptions
 
@@ -223,7 +228,7 @@ Before any application can be onboarded, the platform team sets up shared infras
 3. Add `instance-permissions.yml` if cross-team topic access is needed (see [request-access](../app-developer/request-access.md))
 4. Open a PR — dry-run validates against policies. After review and merge, resources apply automatically.
 
-No workflow changes needed — the detection logic handles new apps and instances automatically.
+No workflow changes are needed for new apps. A new instance name must first be added to `VALID_INSTANCES` in `apply-apps.yml` (and in `apply-clusters.yml` if it has its own cluster).
 
 ## Labels convention
 
@@ -247,7 +252,7 @@ When generating a repo from scratch (e.g. via [bootstrap-self-service-cli.md](bo
 | Hand-rolling the repo instead of cloning the template | Use `gh repo create --template conduktor/self-service-template`. The template is maintained — your hand-rolled version drifts. |
 | Using `<env>` folders instead of `<instance>` | The template uses `<instance>` to align with the `ApplicationInstance` resource. Folder name should match the instance label. |
 | Skipping `apply-clusters.yml` and putting clusters in `apply-platform.yml` | Cluster resources need instance-scoped credentials (`KAFKA_BOOTSTRAP_SERVERS` etc.). Keeping them in a separate workflow with per-instance environments isolates those secrets. |
-| Using AdminToken for application workflows | Use ApplicationInstanceTokens — they enforce app/instance boundaries |
+| Using AdminToken for application workflows | Use ApplicationInstanceTokens: they are limited to the team's own application, while an AdminToken can change the whole platform |
 | Changes spanning multiple app/instance folders in one PR | The detection logic validates a single folder per PR. Split into separate PRs. |
 | Not creating GitHub Environments before merging the first PR | Workflows select environments by name. Missing environments cause failures. |
 | Applying exceptions through the app workflow | Exceptions must go through `platform/exceptions/` and `apply-platform.yml` (AdminToken bypasses policies) |

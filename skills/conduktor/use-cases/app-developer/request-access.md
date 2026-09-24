@@ -2,13 +2,12 @@
 
 ## Agent workflow
 
-1. Run `conduktor get Topic -o name` to list available topics
-2. Ask which topic the user needs access to and what level (READ or WRITE)
-3. Run `conduktor get ApplicationInstance -o name` to find the user's ApplicationInstance
-4. Run `conduktor get ApplicationInstance -o yaml` on the target topic to identify the owning ApplicationInstance
-5. Generate the `ApplicationInstancePermission` YAML with real names from steps 1-4
-6. Show the YAML and offer to run `conduktor apply -f --dry-run`
-7. On approval, run `conduktor apply -f`
+1. Run `conduktor run whoami`. With an application-instance token it names the requester's ApplicationInstance (`grantedTo`).
+2. Ask which topic the user needs and what level (READ or WRITE). The requester's token only lists its own and already-granted topics, so another team's topic is found in the Console **Topic Catalog**, or the user gives its name.
+3. Identify the owning ApplicationInstance: the Topic Catalog shows the owner. With an admin token, `conduktor get ApplicationInstance -o yaml` lets you match `spec.resources` against the topic name.
+4. Generate the `ApplicationInstancePermission` YAML with the real names from steps 1-3.
+5. It is applied by the **owning** team (their application-instance token, or an admin), not with the requester's token: hand them the YAML or open a PR in their folder. The applier runs `conduktor apply -f <file> --dry-run`, then `conduktor apply -f <file>`.
+6. Self-service needs a paid Console license ([guardrails](../../references/guardrails.md) §1). From Console 1.45, requesting and granting in the UI need the matching `instancePermissions` on an ApplicationGroup.
 
 ## When to use this
 
@@ -136,4 +135,5 @@ The permission `spec.resource.name` must be a sub-resource of the owning Applica
 | Trying to update spec fields | `spec` is immutable after creation | Delete the existing permission and recreate with new values |
 | Confusing ownership vs permission | Creating an ApplicationInstance resource for a prefix you don't own | Use `ApplicationInstancePermission` for cross-team access, not `ApplicationInstance.spec.resources` |
 | Using AppToken from the wrong instance | AppToken must belong to the owning application instance, not the requesting one | Generate the AppToken from the owning team's ApplicationInstance |
-| `userPermission` and `serviceAccountPermission` both set to NONE | Permission resource is valid but grants nothing | Set at least one to `READ` or `WRITE` |
+| `userPermission` and `serviceAccountPermission` both set to NONE | Rejected (400: they cannot both be NONE) | Set at least one to `READ` or `WRITE` |
+| Applying the permission with the requester's token | The owner grants access, not the requester | Send the YAML or PR to the owning team, or use Request Access in the Topic Catalog |

@@ -57,10 +57,15 @@ spec:
   priority: 100
   config:
     topic: sensitive-data
-    fields:
-      - fieldName: email
-        keySecretId: vault-kms://vault:8200/transit/keys/pii-key
-        algorithm: AES128_GCM
+    kmsConfig:
+      vault:
+        uri: http://vault:8200
+        token: $${VAULT_TOKEN}   # $$ = let Gateway resolve it; ${…} would be substituted by the CLI
+    recordValue:
+      fields:
+        - fieldName: email
+          keySecretId: vault-kms://vault:8200/transit/keys/pii-key
+          algorithm: AES128_GCM
 ```
 
 ## 5. CLI targeting confusion
@@ -90,7 +95,7 @@ export CDK_GATEWAY_PASSWORD=conduktor
 pluginClass: io.conduktor.gateway.interceptor.FieldEncryptionInterceptor  # Does not exist
 ```
 **Why:** Plugin class names are exact. No fuzzy matching. Invalid names fail at deploy.
-**Correct:** Use only documented classes: `io.conduktor.gateway.interceptor.EncryptPlugin`, `DecryptPlugin`, `EncryptSchemaBasedPlugin`, `safeguard.CreateTopicPolicyPlugin`, etc. When unsure, use `conduktor template Interceptor`.
+**Correct:** Use only documented classes: `io.conduktor.gateway.interceptor.EncryptPlugin`, `DecryptPlugin`, `EncryptSchemaBasedPlugin`, `safeguard.CreateTopicPolicyPlugin`, etc. When unsure, list what the running Gateway knows (`curl -u <admin>:<pwd> http://<gateway>:8888/gateway/v2/plugin`) or check the docs MCP. `conduktor template Interceptor` only prints one sample, not a catalog. Removed in 3.19: `FetchEncryptPlugin`, `FetchEncryptSchemaBasedPlugin`.
 
 ## 7. Using Kafka CLI tools instead of Conduktor CLI
 
@@ -145,39 +150,26 @@ metadata:
 spec: ...
 ```
 
-## 10. Wrong apiVersion for self-service resources
+## 10. "Fixing" apiVersion prefixes on resources managed with CLI state
 
 **Wrong:**
 ```yaml
-apiVersion: v1
-kind: ApplicationGroup
+# Existing file, applied with --enable-state
+apiVersion: v2          # rewritten to kafka/v2 "to follow best practices"
+kind: Topic
 ```
-```yaml
-apiVersion: self-service/v1
-kind: Application
-```
-**Why:** Self-service resources require exactly `self-serve/v1`. Using `v1` or `self-service/v1` may be silently accepted by some API versions but is incorrect and can cause failures. This applies to: `Application`, `ApplicationInstance`, `ApplicationInstancePermission`, `ApplicationGroup`, and `ResourcePolicy`.
-**Correct:**
-```yaml
-apiVersion: self-serve/v1
-kind: ApplicationGroup
-```
+**Why:** Only the version number matters: the CLI reads the digit after `v`, and Console ignores the prefix. `v2`, `kafka/v2` and `iam/v2` are the same thing, and `conduktor get` and `conduktor template` print `v2`. But CLI state identifies a resource by its exact `apiVersion` string, so rewriting it on a state-managed Topic deletes and recreates the topic, with all its data. See [guardrails.md](guardrails.md) §3.
+**Correct:** Keep the `apiVersion` strings a repo already uses. For new files, any prefix works as long as the number matches the kind (Topic `v2`, ServiceAccount `v1`, DataQualityRule `v1`).
 
 ## 11. Using TopicPolicy instead of ResourcePolicy
 
 **Wrong:**
-```bash
-conduktor get TopicPolicy -o yaml
-```
 ```yaml
 kind: TopicPolicy
 ```
-**Why:** TopicPolicy is deprecated. It only supports topics and uses rigid constraint types (OneOf, Range, Match). ResourcePolicy replaces it with CEL expressions and supports Topic, Connector, Subject, and ApplicationGroup.
+**Why:** TopicPolicy is deprecated, and since Console 1.47 creating or updating one is refused (400), which breaks GitOps repos that still apply them. ResourcePolicy replaces it with CEL expressions and supports Topic, Connector, Subject, ApplicationGroup and, since 1.47, ApplicationInstancePermission.
 **Correct:**
-```bash
-conduktor get ResourcePolicy -o yaml
-```
 ```yaml
 kind: ResourcePolicy
 ```
-Use `spec.policyRef` on ApplicationInstance, not `spec.topicPolicyRef`.
+Use `spec.policyRef` on ApplicationInstance, not `spec.topicPolicyRef`. To migrate, list the existing ones with `conduktor get TopicPolicy -o yaml` (still readable), then recreate them as ResourcePolicies.

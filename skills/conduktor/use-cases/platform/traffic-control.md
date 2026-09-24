@@ -2,13 +2,13 @@
 
 ## Agent workflow
 
-1. Run `conduktor get Interceptor --gateway -o yaml` to check existing safeguard interceptors
+1. Run `conduktor get Interceptor -o yaml` to check existing safeguard interceptors (needs `CDK_GATEWAY_BASE_URL/USER/PASSWORD`; there is no `--gateway` flag on a single kind)
 2. Ask what to control: rate limiting, topic creation standards, config protection, read-only mode, or schema enforcement
 3. Ask the scope: global, per virtual cluster, per service account, or per group
 4. Run `conduktor get VirtualCluster -o name` and `conduktor get GatewayServiceAccount -o name` to get real scope targets
 5. Generate the complete `Interceptor` YAML with the correct safeguard `pluginClass` and action (BLOCK, INFO, OVERRIDE)
-6. Show the YAML and offer to run `conduktor apply -f --dry-run`
-7. On approval, run `conduktor apply -f`
+6. Show the YAML and run `conduktor apply -f <file> --dry-run`. For Interceptors the dry-run does not validate the plugin class or its config; only the real apply does
+7. On approval, run `conduktor apply -f <file>`
 
 Gateway interceptor policies enforce traffic rules at the proxy layer -- before requests reach Kafka. They validate, reject, or silently fix Kafka API requests in real time.
 
@@ -83,7 +83,7 @@ Protects: `retention.ms`, `retention.bytes`, `segment.ms`, `segment.bytes`, `seg
 
 **`ConsumerRateLimitingPolicyPlugin`** -- throttles consumers exceeding `maximumBytesPerSecond`.
 
-Both apply per Gateway instance. Scope with `metadata.scope.username` or `group` to target specific service accounts.
+Each rule has its own limiter on each Gateway node, shared by every client it matches: a group scope gives the whole group one budget, and N Gateway nodes allow N× the rate. Without a scope, the rule covers only the passthrough (non-virtual) cluster. Scope with `metadata.scope.username` or `group` to target specific service accounts.
 
 ### Connection limiting
 
@@ -95,7 +95,7 @@ Both apply per Gateway instance. Scope with `metadata.scope.username` or `group`
 
 ### Read-only topics
 
-**`ReadOnlyTopicPolicyPlugin`** -- blocks all mutating requests (Produce, DeleteTopics, AlterConfigs, CreatePartitions, DeleteRecords, etc.) on matching topics. Only BLOCK and INFO actions.
+**`ReadOnlyTopicPolicyPlugin`** -- blocks all mutating requests (Produce, DeleteTopics, AlterConfigs, CreatePartitions, DeleteRecords, etc.) on matching topics. Only BLOCK rejects writes: INFO only logs, THROTTLE asks the client to back off, and OVERRIDE is accepted but blocks nothing.
 
 ### Schema enforcement
 
@@ -201,8 +201,8 @@ conduktor apply -f <file>.yaml
 ## Common mistakes
 
 - **Forgetting `topic` regex** -- defaults to `.*`, meaning the policy applies to all topics including internal ones. Be explicit.
-- **Using OVERRIDE without `overrideValue`** -- the interceptor silently ignores the override and the original value passes through.
-- **Rate limiting without scope** -- `ProducerRateLimitingPolicyPlugin` without a `username` or `group` scope applies to all clients per Gateway instance, which is rarely what you want.
+- **Using OVERRIDE without `overrideValue`** -- the apply is rejected (400 `overrideValue must not be null`) for numeric settings.
+- **Rate limiting without scope** -- `ProducerRateLimitingPolicyPlugin` without a scope only covers the passthrough cluster, and each Gateway node enforces the limit separately. Scope it and divide by the node count.
 - **Conflicting priorities** -- two interceptors of the same type with the same priority and overlapping scope produce undefined ordering. Use distinct priorities.
 - **OVERRIDE on ProducePolicyPlugin** -- this plugin does not support OVERRIDE. Only BLOCK, INFO, and THROTTLE are valid.
-- **ReadOnlyTopicPolicyPlugin with OVERRIDE** -- only BLOCK and INFO are supported. OVERRIDE is silently ignored.
+- **ReadOnlyTopicPolicyPlugin with OVERRIDE** -- accepted, but nothing is blocked and the topic stays writable. Use BLOCK.

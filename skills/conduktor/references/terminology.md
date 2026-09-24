@@ -15,13 +15,16 @@
 
 ## apiVersion quick reference
 
+Only the version number is significant: the CLI reads the digit after `v`, and Console ignores the prefix. The prefixes below are the documented convention. Never rewrite them on resources managed with CLI state, because that deletes and recreates the resource ([guardrails.md](guardrails.md) §3).
+
 | apiVersion | Scope | Example kinds |
 |---|---|---|
 | `gateway/v2` | Gateway resources | Interceptor, VirtualCluster, GatewayServiceAccount, GatewayGroup, AliasTopic, ConcentrationRule |
-| `self-serve/v1` | Self-service | Application, ApplicationInstance, ApplicationInstancePermission, ApplicationGroup, ResourcePolicy, TopicPolicy (deprecated) |
-| `kafka/v2` | Console Kafka resources | Topic |
-| `v2` | Console resources | Group, User, KafkaCluster, KafkaConnect, ServiceAccount |
-| `v1` | Data quality | DataQualityRule, DataQualityPolicy |
+| `self-serve/v1` | Self-service | Application, ApplicationInstance, ApplicationInstancePermission, ApplicationGroup, ResourcePolicy, TopicPolicy (creation blocked since 1.47) |
+| `kafka/v2` | Console Kafka resources | Topic, Subject, Connector |
+| `iam/v2` | Console IAM | Group, User |
+| `console/v2` | Console connections | KafkaCluster, KafkaConnectCluster |
+| `v1` | Kafka ACLs and data quality | ServiceAccount, DataQualityRule, DataQualityPolicy |
 
 ## CLI environment variables
 
@@ -44,6 +47,8 @@
 | `CDK_GATEWAY_PASSWORD` | Gateway password (required) |
 
 ### TLS
+
+These apply to the Console client only. The CLI does not use them for the Gateway admin API.
 
 | Variable | Purpose |
 |---|---|
@@ -69,7 +74,8 @@
 | `delete` | Delete resource of a given kind and name |
 | `edit` | Edit a resource in a text editor and apply changes |
 | `template` | Get a YAML example for a given kind |
-| `login` | Login user using username/password to get a JWT token |
-| `token` | Manage Admin and Application Instance tokens |
+| `login` | Exchange `CDK_USER`/`CDK_PASSWORD` for a JWT (prints it; fails with only an API key) |
+| `token` | Manage Admin and Application Instance tokens (`token create admin <name>` works with `CDK_USER`/`CDK_PASSWORD`) |
+| `run` | Call an API action: `whoami`, consumer groups (describe, reset offsets), connectors (pause, stop, offsets), topics (add partitions, empty). `conduktor run --help` lists what your Console exposes. Exits 0 on API errors |
 | `sql` | Run a SQL command on indexed topics |
 | `version` | Display the version of conduktor |

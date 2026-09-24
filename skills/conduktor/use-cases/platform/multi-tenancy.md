@@ -5,11 +5,11 @@
 1. Run `conduktor get VirtualCluster -o yaml` to list existing virtual clusters
 2. Run `conduktor get GatewayServiceAccount -o name` and `conduktor get GatewayGroup -o name` to see existing accounts and groups
 3. Ask how many teams/tenants, their names, and isolation requirements
-4. Ask the ACL mode for each virtual cluster: `ALLOW_ALL` (dev), `REST_API` (recommended), or `KAFKA_API`
+4. Ask how each virtual cluster handles ACLs: none (`aclEnabled: false`, no `aclMode`, dev only), `REST_API` (recommended), or `KAFKA_API`. There is no `ALLOW_ALL` mode
 5. Generate the complete set of resources: `VirtualCluster`, `GatewayServiceAccount`, and `GatewayGroup` YAML for each tenant
 6. If topic aliasing is needed, generate `AliasTopic` resources
-7. Show all YAMLs and offer to run `conduktor apply -f --dry-run`
-8. On approval, run `conduktor apply -f`
+7. Show all YAMLs and run `conduktor apply -f <file> --dry-run`
+8. On approval, run `conduktor apply -f <file>`. Virtual clusters need the Gateway multi-tenancy license feature and a SASL or mTLS listener (a PLAINTEXT-only Gateway rejects them)
 
 Gateway turns a single physical Kafka cluster into N isolated logical clusters using Virtual Clusters.
 Each tenant gets its own namespace for topics, consumer groups, service accounts, ACLs, and interceptors -- all on shared infrastructure.
@@ -29,10 +29,12 @@ A Virtual Cluster prefixes all resources (topics, consumer groups) on the backin
 Tenants see clean names; the physical cluster stores prefixed names.
 
 ```
-Tenant Alice sees:    orders
-Tenant Bob sees:      orders
-Physical Kafka has:   vc-alice.orders, vc-bob.orders
+Virtual clusters:     alice.            bob.
+Tenant sees:          orders            orders
+Physical Kafka has:   alice.orders      bob.orders
 ```
+
+The virtual cluster name is used verbatim as the prefix, with no separator added: `team-payments` + `orders` becomes `team-paymentsorders`. End the name with a separator (`team-payments.`) if you want one.
 
 Tenants are fully isolated: Alice cannot see or access Bob's resources.
 
@@ -85,7 +87,7 @@ spec:
 ```
 
 - `EXTERNAL`: `externalNames` must be a non-empty list (currently limited to one element). Each name must be unique across all GatewayServiceAccounts.
-- `LOCAL`: use `/gateway/v2/tokens` to generate credentials for this account.
+- `LOCAL`: generate credentials with `conduktor run generateServiceAccountToken --v-cluster team-payments --username payments-app --life-time-seconds 86400` (API: `POST /gateway/v2/token`).
 
 ### 3. Group service accounts
 
@@ -131,27 +133,7 @@ spec:
       action: "BLOCK"
 ```
 
-Target a group instead:
-
-```yaml
----
-apiVersion: gateway/v2
-kind: Interceptor
-metadata:
-  name: enforce-partition-limit
-  scope:
-    vCluster: team-payments
-    group: payments-readers
-spec:
-  pluginClass: "io.conduktor.gateway.interceptor.safeguard.CreateTopicPolicyPlugin"
-  priority: 100
-  config:
-    topic: ".*"
-    numPartition:
-      min: 3
-      max: 12
-      action: "BLOCK"
-```
+To target a group instead, keep the same interceptor and add `group: payments-readers` under `metadata.scope`, next to `vCluster`. The group must exist, and a scope can't set both `group` and `username`.
 
 Global interceptor including vclusters (set all scope fields to `null`):
 
@@ -214,7 +196,7 @@ spec:
 - `spec.physicalTopics.delete` is mandatory. `compact` and `deleteCompact` are optional.
 - Each physical topic must have the matching `cleanup.policy`.
 - `autoManaged: true` auto-creates/extends physical topics.
-- `offsetCorrectness: true` maintains per-concentrated-topic offsets (enables accurate lag reporting).
+- `offsetCorrectness` is deprecated since 3.21 (removal in 3.24) and the docs advise against enabling it: leave it `false`.
 - Changing a ConcentrationRule does not affect previously created concentrated topics.
 - A topic creation fails if its `cleanup.policy` has no matching physical topic configured.
 
@@ -296,7 +278,7 @@ spec:
 
 Set via `GATEWAY_SECURITY_MODE` environment variable.
 
-- `GATEWAY_MANAGED`: full control over service accounts and ACLs at the Gateway layer. Required for virtual clusters.
+- `GATEWAY_MANAGED`: full control over service accounts and ACLs at the Gateway layer. Required for virtual clusters, together with a SASL or mTLS listener.
 - `KAFKA_MANAGED`: delegates auth to Kafka. No virtual clusters, no alias topics, no concentrated topics. External service accounts can still be mapped for friendly naming.
 
 ## Common mistakes
