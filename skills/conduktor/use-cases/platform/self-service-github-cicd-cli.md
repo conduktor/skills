@@ -95,9 +95,9 @@ Do not assume `dev/stag/prod`. Ask the user what dimensions matter to them. The 
 | Token Type | Scope | Use in CI/CD |
 |---|---|---|
 | **AdminToken** | Full platform access | `apply-platform.yml` and `apply-clusters.yml` |
-| **ApplicationInstanceToken** | Scoped to a single ApplicationInstance | `apply-apps.yml` — one per app/instance |
+| **ApplicationInstanceToken** | Issued for one ApplicationInstance | `apply-apps.yml` — one per app/instance |
 
-**Do not use AdminTokens for application workflows.** ApplicationInstanceTokens enforce that a team can only modify resources within their own instance boundaries.
+**Do not use AdminTokens for application workflows.** An AdminToken can change anything on the platform. An ApplicationInstanceToken is limited to its own application's resources, so a leaked token exposes one application, not the platform.
 
 ## GitHub Environments
 
@@ -252,7 +252,7 @@ When generating a repo from scratch (e.g. via [bootstrap-self-service-cli.md](bo
 | Hand-rolling the repo instead of cloning the template | Use `gh repo create --template conduktor/self-service-template`. The template is maintained — your hand-rolled version drifts. |
 | Using `<env>` folders instead of `<instance>` | The template uses `<instance>` to align with the `ApplicationInstance` resource. Folder name should match the instance label. |
 | Skipping `apply-clusters.yml` and putting clusters in `apply-platform.yml` | Cluster resources need instance-scoped credentials (`KAFKA_BOOTSTRAP_SERVERS` etc.). Keeping them in a separate workflow with per-instance environments isolates those secrets. |
-| Using AdminToken for application workflows | Use ApplicationInstanceTokens — they enforce app/instance boundaries |
+| Using AdminToken for application workflows | Use ApplicationInstanceTokens: they are limited to the team's own application, while an AdminToken can change the whole platform |
 | Changes spanning multiple app/instance folders in one PR | The detection logic validates a single folder per PR. Split into separate PRs. |
 | Not creating GitHub Environments before merging the first PR | Workflows select environments by name. Missing environments cause failures. |
 | Applying exceptions through the app workflow | Exceptions must go through `platform/exceptions/` and `apply-platform.yml` (AdminToken bypasses policies) |
