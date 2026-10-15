@@ -86,6 +86,7 @@ When a user mentions these keywords, load the corresponding file:
 - **virtual cluster, tenant, isolation, team namespace** -> `use-cases/platform/multi-tenancy.md`
 - **rate limit, throttle, safeguard, quota, traffic** -> `use-cases/platform/traffic-control.md`
 - **deploy, Docker, Helm, Kubernetes, install** -> `use-cases/platform/deploy-conduktor.md`
+- **Gateway Community Edition, free Gateway, passthrough, cross-VPC, try Gateway without a cluster** -> `use-cases/platform/gateway-community-edition.md`
 - **conduktor CLI, apply, GitOps, CI/CD, pipeline, automation** -> `use-cases/platform/gitops-automation.md`
 - **GitHub Actions, CODEOWNERS, workflow, token scope, ResourcePolicy examples, onboarding app** -> `use-cases/platform/self-service-github-cicd-cli.md`
 - **bootstrap, self-service, adopt, migrate, ownership, reverse-engineer** -> `use-cases/platform/bootstrap-self-service-cli.md`
