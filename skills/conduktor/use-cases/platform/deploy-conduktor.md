@@ -4,7 +4,7 @@
 
 1. Check prereqs: run `docker --version`, `kubectl version --client`, `helm version` to see what's available
 2. Ask the user's goal:
-   - **Quick test**: just try Conduktor with a demo Kafka cluster → use the official quick-start
+   - **Quick test**: just try Conduktor with a demo Kafka cluster → use the official quick-start. To try Gateway, use [gateway-community-edition.md](gateway-community-edition.md) instead: the Console quick-start has no Gateway
    - **Connect to existing cluster**: the user already has Kafka (vanilla, Confluent Cloud, AWS MSK, Aiven, Redpanda) → generate a custom config
    - **Production deployment**: full setup with Helm/K8s, SSO, monitoring → walk through all options
 3. **Quick test path**:
@@ -19,7 +19,7 @@
    - Ask: bootstrap servers, auth type (PLAINTEXT, SASL_PLAINTEXT, SASL_SSL, SSL), credentials
    - Ask: schema registry URL if applicable
    - Ask: want Gateway too or Console only?
-   - For Gateway, generate the `KAFKA_*` env vars for that flavor (see below). Console ignores `KAFKA_*`: register the cluster in Console through the UI, `CDK_CLUSTERS_0_*` env vars, a `clusters:` entry in platform-config, or a `KafkaCluster` resource
+   - For Gateway, generate the `KAFKA_*` env vars for that flavor (see below). With a Community Edition license, Gateway runs `KAFKA_MANAGED` only: follow [gateway-community-edition.md](gateway-community-edition.md). Console ignores `KAFKA_*`: register the cluster in Console through the UI, `CDK_CLUSTERS_0_*` env vars, a `clusters:` entry in platform-config, or a `KafkaCluster` resource
    - For Confluent Cloud: include `kafkaFlavor` config with cloud API key, environment ID, cluster ID
    - For AWS MSK with IAM: include IAM callback handler config
    - Offer to run `docker compose up -d` or `helm install`
